@@ -1,0 +1,4 @@
+.streamlit/secrets.toml
+*.json  # Che file JSON service account nếu có
+__pycache__/
+*.pyc
