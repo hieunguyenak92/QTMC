@@ -27,7 +27,8 @@ def connect_sheets():
         gc = gspread.authorize(creds)
         
         # Thử mở file sheet
-        return gc.open("QuanLyNhaThuoc")
+        #return gc.open("QuanLyNhaThuoc")
+        return gc.open_by_url(st.secrets.gsheets.sheet_url) 
     except Exception as e:
         st.error(f"❌ Lỗi xác thực hoặc mở file: {e}")
         st.stop()
