@@ -10,9 +10,8 @@ SCOPES = [
 def connect_sheets():
     # Kiểm tra sự tồn tại của secrets trước khi truy cập
     if "gsheets" in st.secrets:
+        print("Lay sheet connect info")
         creds_info = dict(st.secrets["gsheets"])
-    elif "gcp_service_account" in st.secrets:
-        creds_info = dict(st.secrets["gcp_service_account"])
     else:
         # Nếu không tìm thấy, hiển thị hướng dẫn cụ thể trên giao diện app
         st.error("❌ Không tìm thấy thông tin cấu hình trong Streamlit Secrets!")
