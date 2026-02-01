@@ -73,7 +73,7 @@ def render_login():
                 else:
                     st.error("Sai mật khẩu!")
 
-# --- 2. MAN HINH BAN HANG (GIỮ NGUYÊN + TÌM KIẾM CẢI THIỆN) ---
+# --- 2. MAN HINH BAN HANG ---
 def render_sales(df_inv):
     st.subheader("🛒 Bán Hàng Tại Quầy")
     col_search, col_cart = st.columns([5, 5], gap="large")
@@ -154,7 +154,7 @@ def render_sales(df_inv):
         else:
             st.caption("Chưa có hàng trong giỏ.")
 
-# --- 3. MAN HINH NHAP HANG (GIỮ NGUYÊN) ---
+# --- 3. MAN HINH NHAP HANG ---
 def render_import(df_inv):
     st.subheader("📦 Nhập Kho")
     tab1, tab2 = st.tabs(["Nhập thêm hàng cũ", "Thêm sản phẩm mới hoàn toàn"])
@@ -210,7 +210,7 @@ def render_import(df_inv):
                 st.success("Đã nhập kho thành công!")
                 st.rerun()
 
-# --- 4. MAN HINH BAO CAO (FIX BIỂU ĐỒ THÁNG + THÊM NHIỀU TÍNH NĂNG MỚI) ---
+# --- 4. MAN HINH BAO CAO ---
 def render_reports(df_inv):
     st.subheader("📊 Báo Cáo Hệ Thống")
     
@@ -243,7 +243,7 @@ def render_reports(df_inv):
             st.info("Chưa có dữ liệu kho.")
 
     with t2:
-        # THÊM: Doanh thu hôm nay (metric nổi bật)
+        # Metric hôm nay
         if not df_sales.empty and 'NgayBan' in df_sales.columns:
             df_sales['NgayBan'] = pd.to_datetime(df_sales['NgayBan'])
             today_str = datetime.now().strftime('%Y-%m-%d')
@@ -285,13 +285,11 @@ def render_reports(df_inv):
         
         df_month = df_sales[df_sales['NgayBan'].dt.month == datetime.now().month].copy()
         if not df_month.empty:
-            # THÊM: Top 10 bán chạy tháng này (giữ nguyên cũ)
             st.write("### 🔥 Top 10 sản phẩm bán chạy tháng này")
             top10 = df_month[df_month['SoLuong'] > 0].groupby(['MaSanPham', 'TenSanPham'])['SoLuong'].sum().reset_index()
             top10 = top10.sort_values('SoLuong', ascending=False).head(10)
             st.dataframe(top10, use_container_width=True)
             
-            # THÊM: Biểu đồ doanh thu theo sản phẩm top 10 tháng này
             st.write("### 📊 Doanh thu theo sản phẩm (Top 10 tháng này)")
             top10_revenue = df_month[df_month['SoLuong'] > 0].groupby('TenSanPham')['ThanhTien'].sum().reset_index()
             top10_revenue = top10_revenue.sort_values('ThanhTien', ascending=False).head(10)
@@ -304,53 +302,48 @@ def render_reports(df_inv):
             fig_prod.update_layout(yaxis={'categoryorder':'total ascending'}, xaxis_title="Doanh thu (đ)", height=400)
             st.plotly_chart(fig_prod, use_container_width=True)
             
-            # THÊM: Top 10 bán chạy toàn thời gian
             st.write("### 🔥 Top 10 sản phẩm bán chạy toàn thời gian")
             top10_all = df_sales[df_sales['SoLuong'] > 0].groupby(['MaSanPham', 'TenSanPham'])['SoLuong'].sum().reset_index()
             top10_all = top10_all.sort_values('SoLuong', ascending=False).head(10)
             st.dataframe(top10_all, use_container_width=True)
         
-        # FIX DỨT ĐIỂM: ẨN HOÀN TOÀN PHẦN ÂM CỦA CẢ 2 TRỤC
+        # BIỂU ĐỒ THÁNG - FIX DỨT ĐIỂM ẨN HOÀN TOÀN PHẦN ÂM TRỤC X & Y
         st.write("### 📈 Doanh thu & Lợi nhuận tháng này")
         if not df_month.empty:
             current_year = datetime.now().year
             current_month = datetime.now().month
-            last_day = datetime.now().day  # Ngày hiện tại trong tháng
-        
-            if last_day < 1:  # An toàn, dù không bao giờ xảy ra
+            last_day = datetime.now().day
+
+            if last_day < 1:
                 last_day = 1
-        
-            # Tạo full ngày từ 1 đến hôm nay
+
             days_in_month = pd.date_range(
                 start=f"{current_year}-{current_month:02d}-01",
                 end=f"{current_year}-{current_month:02d}-{last_day:02d}",
                 freq='D'
             )
             daily_full = pd.DataFrame({'day': days_in_month.dt.day})
-        
-            # Group dữ liệu thực
+
             daily = df_month.groupby(df_month['NgayBan'].dt.day)[['ThanhTien', 'LoiNhuan']].sum().reset_index()
             daily.rename(columns={'NgayBan': 'day'}, inplace=True)
-        
-            # Merge để đầy đủ ngày + fill 0 + ép int sạch
+
             daily = daily_full.merge(daily, on='day', how='left').fillna(0)
             daily['day'] = daily['day'].astype(int)
             daily['ThanhTien'] = daily['ThanhTien'].clip(lower=0)
             daily['LoiNhuan'] = daily['LoiNhuan'].clip(lower=0)
-        
-            # Tính max_y để padding nhẹ phía trên, force từ 0
+
             max_y_value = max(daily['ThanhTien'].max(), daily['LoiNhuan'].max())
             if max_y_value == 0:
-                max_y_value = 100000  # Nếu chưa bán, hiển thị trục nhỏ
-            max_y = max_y_value * 1.15  # Padding 15% phía trên
-        
+                max_y_value = 100000
+            max_y = max_y_value * 1.15
+
             fig = go.Figure()
             fig.add_trace(go.Bar(
                 x=daily['day'],
                 y=daily['ThanhTien'],
                 name="Doanh Thu",
                 marker_color='#0068C9',
-                width=0.8  # Bar rộng vừa phải
+                width=0.8
             ))
             fig.add_trace(go.Scatter(
                 x=daily['day'],
@@ -360,7 +353,7 @@ def render_reports(df_inv):
                 line=dict(color='red', width=3),
                 marker=dict(size=8)
             ))
-        
+
             fig.update_layout(
                 title=f"Doanh thu & Lợi nhuận tháng {current_month}/{current_year}",
                 xaxis_title="Ngày",
@@ -368,17 +361,17 @@ def render_reports(df_inv):
                 xaxis=dict(
                     type='category',
                     tickmode='linear',
-                    range=[0.5, last_day + 0.5],   # Force chỉ hiển thị từ ngày 1 đến hôm nay, không khoảng thừa trái/phải
-                    constrain='domain',            # Không cho zoom ra ngoài range
+                    range=[0.5, last_day + 0.5],
+                    constrain='domain',
                     showgrid=False
                 ),
                 yaxis=dict(
-                    range=[0, max_y],              # BẮT BUỘC từ 0 chính xác, không phần âm nào
-                    fixedrange=True,               # Không cho zoom xuống dưới 0
-                    zeroline=False,                # Ẩn đường zero nếu không muốn
+                    range=[0, max_y],
+                    fixedrange=True,
+                    zeroline=False,
                     showgrid=True
                 ),
-                bargap=0.15,                       # Khoảng cách giữa các bar vừa phải
+                bargap=0.15,
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
             st.plotly_chart(fig, use_container_width=True)
