@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime
+from datetime import datetime, date
 import os
 import data_manager as dm
 
@@ -73,7 +73,7 @@ def render_login():
                 else:
                     st.error("Sai mật khẩu!")
 
-# --- 2. MAN HINH BAN HANG ---
+# --- 2. MAN HINH BAN HANG (VỚI NHẬP NHANH KHI HẾT KHO) ---
 def render_sales(df_inv):
     st.subheader("🛒 Bán Hàng Tại Quầy")
     col_search, col_cart = st.columns([5, 5], gap="large")
@@ -81,7 +81,7 @@ def render_sales(df_inv):
     with col_search:
         st.info("Tìm kiếm sản phẩm")
         if not df_inv.empty:
-            search_term = st.text_input("🔍 Nhập tên hoặc mã sản phẩm")
+            search_term = st.text_input("🔍 Nhập tên hoặc mã sản phẩm", key="sales_search")
             
             filtered_df = df_inv
             if search_term:
@@ -94,7 +94,7 @@ def render_sales(df_inv):
                 options = filtered_df.apply(
                     lambda x: f"{x['TenSanPham']} | Mã: {x['MaSanPham']} | Tồn: {int(x['SoLuong'])} {x['DonVi']}", axis=1
                 ).tolist()
-                selected_str = st.selectbox("Chọn sản phẩm:", [""] + options)
+                selected_str = st.selectbox("Chọn sản phẩm:", [""] + options, key="sales_select")
                 
                 if selected_str:
                     selected_item = filtered_df[
@@ -108,15 +108,50 @@ def render_sales(df_inv):
                         c1, c2, c3 = st.columns(3)
                         c1.metric("Mã SP", selected_item['MaSanPham'])
                         c2.metric("Đơn vị", selected_item['DonVi'])
-                        c3.metric("Tồn kho", int(selected_item['SoLuong']))
+                        c3.metric("Tồn kho hiện tại", int(selected_item['SoLuong']))
+                        
+                        if selected_item['SoLuong'] < 10:
+                            st.warning(f"⚠️ Tồn kho thấp: chỉ còn {int(selected_item['SoLuong'])} {selected_item['DonVi']}! Nên nhập thêm sớm.")
+                        
                         st.divider()
                         c_price, c_qty = st.columns([1, 1])
                         c_price.metric("Giá bán", format_currency(selected_item['GiaBan']))
-                        qty_sell = c_qty.number_input("Số lượng mua:", min_value=1, value=1, step=1)
-                        
-                        if st.button("➕ Thêm vào giỏ", type="primary"):
+                        qty_sell = c_qty.number_input("Số lượng bán:", min_value=1, value=1, step=1, key=f"qty_{selected_item['MaSanPham']}")
+
+                        if st.button("➕ Thêm vào giỏ", type="primary", key=f"add_{selected_item['MaSanPham']}"):
                             if qty_sell > selected_item['SoLuong']:
-                                st.error(f"Không đủ tồn kho!")
+                                st.error(f"Không đủ tồn kho! Chỉ còn {int(selected_item['SoLuong'])} {selected_item['DonVi']}.")
+                                
+                                st.markdown("#### 📦 Nhập nhanh bổ sung tồn kho (không mất giỏ hàng)")
+                                with st.form(key=f"quick_import_{selected_item['MaSanPham']}"):
+                                    col_q, col_gn, col_gb = st.columns(3)
+                                    quick_qty = col_q.number_input("Số lượng nhập thêm", min_value=1, value=max(10, qty_sell - selected_item['SoLuong']))
+                                    quick_gn = col_gn.number_input("Giá nhập mới", value=float(selected_item['GiaNhap']))
+                                    quick_gb = col_gb.number_input("Giá bán mới (nếu thay đổi)", value=float(selected_item['GiaBan']))
+                                    
+                                    if st.form_submit_button("💾 Nhập nhanh & Thêm vào giỏ", type="primary"):
+                                        temp_import = [{
+                                            "MaSanPham": selected_item['MaSanPham'],
+                                            "TenSanPham": selected_item['TenSanPham'],
+                                            "DonVi": selected_item['DonVi'],
+                                            "SoLuong": quick_qty,
+                                            "GiaNhap": quick_gn,
+                                            "GiaBan": quick_gb,
+                                            "NhaCungCap": ""
+                                        }]
+                                        
+                                        if dm.process_import(temp_import):
+                                            st.success(f"Đã nhập thêm {quick_qty} {selected_item['DonVi']} vào kho!")
+                                            st.session_state['sales_cart'].append({
+                                                "MaSanPham": selected_item['MaSanPham'],
+                                                "TenSanPham": selected_item['TenSanPham'],
+                                                "DonVi": selected_item['DonVi'],
+                                                "GiaBan": quick_gb,
+                                                "SoLuongBan": qty_sell,
+                                                "ThanhTien": qty_sell * quick_gb
+                                            })
+                                            st.toast(f"Đã thêm {selected_item['TenSanPham']} vào giỏ!")
+                                            st.rerun()
                             else:
                                 st.session_state['sales_cart'].append({
                                     "MaSanPham": selected_item['MaSanPham'],
@@ -127,6 +162,7 @@ def render_sales(df_inv):
                                     "ThanhTien": qty_sell * selected_item['GiaBan']
                                 })
                                 st.toast(f"Đã thêm {selected_item['TenSanPham']}")
+                                st.rerun()
             else:
                 st.warning("Không tìm thấy sản phẩm nào.")
         else:
@@ -210,13 +246,12 @@ def render_import(df_inv):
                 st.success("Đã nhập kho thành công!")
                 st.rerun()
 
-# --- 4. MAN HINH BAO CAO ---
+# --- 4. MAN HINH BAO CAO (THÊM LỊCH SỬ ĐƠN HÀNG CHI TIẾT THEO NGÀY) ---
 def render_reports(df_inv):
     st.subheader("📊 Báo Cáo Hệ Thống")
     
     df_sales = dm.load_sales_history()
     
-    # Tổng doanh thu & lợi nhuận toàn thời gian
     if not df_sales.empty:
         total_revenue = df_sales['ThanhTien'].sum()
         total_profit = df_sales['LoiNhuan'].sum()
@@ -245,7 +280,7 @@ def render_reports(df_inv):
     with t2:
         # Metric hôm nay
         if not df_sales.empty and 'NgayBan' in df_sales.columns:
-            df_sales['NgayBan'] = pd.to_datetime(df_sales['NgayBan'], errors='coerce')  # Thêm errors='coerce' để an toàn
+            df_sales['NgayBan'] = pd.to_datetime(df_sales['NgayBan'], errors='coerce')
             today_str = datetime.now().strftime('%Y-%m-%d')
             df_today_sales = df_sales[(df_sales['NgayBan'].dt.strftime('%Y-%m-%d') == today_str) & (df_sales['SoLuong'] > 0)]
             
@@ -259,27 +294,37 @@ def render_reports(df_inv):
             col3.metric("Số đơn hàng hôm nay", today_orders)
             st.divider()
 
-        st.write("### 📋 Danh sách hàng bán trong ngày")
+        # THÊM TÍNH NĂNG MỚI: LỊCH SỬ ĐƠN HÀNG CHI TIẾT THEO NGÀY
+        st.write("### 📋 Lịch sử chi tiết đơn hàng")
+        selected_date = st.date_input("Chọn ngày xem đơn hàng", value=date.today())
+        
         if not df_sales.empty and 'NgayBan' in df_sales.columns:
-            today = datetime.now().strftime('%Y-%m-%d')
-            df_today = df_sales[df_sales['NgayBan'].dt.strftime('%Y-%m-%d') == today].copy()
+            df_sales['date'] = df_sales['NgayBan'].dt.date
+            df_selected_day = df_sales[df_sales['date'] == selected_date].copy()
             
-            if not df_today.empty:
-                df_today = df_today.sort_values(by='NgayBan', ascending=False)
-                for idx, row in df_today.iterrows():
-                    with st.container(border=True):
-                        c1, c2, c3, c4, c5 = st.columns([1, 3, 1, 2, 1])
-                        c1.write(f"🕒 {row['NgayBan'].strftime('%H:%M')}")
-                        c2.write(f"**{row['TenSanPham']}** ({row['MaSanPham']})")
-                        c3.write(f"{int(row['SoLuong'])} {row['DonVi']}")
-                        c4.write(f"Tổng: {format_currency(row['ThanhTien'])}")
-                        if row['SoLuong'] > 0:
-                            if c5.button("Hoàn trả", key=f"ret_{idx}"):
-                                if dm.process_return(row['MaDonHang'], row['MaSanPham'], row['SoLuong']):
-                                    st.success("Đã hoàn trả hàng vào kho!")
-                                    st.rerun()
+            if not df_selected_day.empty:
+                # Tổng doanh thu ngày chọn
+                day_revenue = df_selected_day[df_selected_day['SoLuong'] > 0]['ThanhTien'].sum()
+                st.info(f"**Tổng doanh thu ngày {selected_date.strftime('%d/%m/%Y')}: {format_currency(day_revenue)}**")
+                
+                # Group theo đơn hàng
+                orders = df_selected_day.groupby('MaDonHang')
+                
+                for order_id, order_df in orders:
+                    order_time = order_df['NgayBan'].min().strftime('%H:%M')
+                    order_total = order_df['ThanhTien'].sum()
+                    num_items = len(order_df)
+                    
+                    with st.expander(f"🧾 Đơn {order_id} | {order_time} | {num_items} sản phẩm | Tổng: {format_currency(order_total)}"):
+                        # Chỉ hiển thị các row bán (SoLuong > 0), bỏ hoàn trả
+                        display_df = order_df[order_df['SoLuong'] > 0][['TenSanPham', 'SoLuong', 'DonVi', 'GiaBan', 'ThanhTien']]
+                        display_df['Thành tiền'] = display_df['ThanhTien'].apply(format_currency)
+                        display_df['Giá bán'] = display_df['GiaBan'].apply(format_currency)
+                        st.dataframe(display_df[['TenSanPham', 'SoLuong', 'DonVi', 'Giá bán', 'Thành tiền']], use_container_width=True, hide_index=True)
             else:
-                st.info("Hôm nay chưa có đơn hàng nào.")
+                st.info(f"Ngày {selected_date.strftime('%d/%m/%Y')} chưa có đơn hàng nào.")
+        else:
+            st.info("Chưa có dữ liệu bán hàng.")
         
         st.divider()
         
@@ -307,27 +352,22 @@ def render_reports(df_inv):
             top10_all = top10_all.sort_values('SoLuong', ascending=False).head(10)
             st.dataframe(top10_all, use_container_width=True)
         
-        # BIỂU ĐỒ THÁNG - FIX LỖI DỨT ĐIỂM (KHÔNG DÙNG pd.date_range ĐỂ TRÁNH LỖI .dt)
         st.write("### 📈 Doanh thu & Lợi nhuận tháng này")
         if not df_month.empty:
             current_month = datetime.now().month
             current_year = datetime.now().year
             last_day = datetime.now().day
 
-            # FIX CHÍNH: Tạo list ngày thủ công, an toàn 100%, không phụ thuộc pd.date_range
             daily_full = pd.DataFrame({'day': list(range(1, last_day + 1))})
 
-            # Group dữ liệu
             daily_group = df_month.groupby(df_month['NgayBan'].dt.day)[['ThanhTien', 'LoiNhuan']].sum().reset_index()
             daily_group.rename(columns={'NgayBan': 'day'}, inplace=True)
 
-            # Merge + fill 0 + ép int
             daily = daily_full.merge(daily_group, on='day', how='left').fillna(0)
             daily['day'] = daily['day'].astype(int)
             daily['ThanhTien'] = daily['ThanhTien'].clip(lower=0)
             daily['LoiNhuan'] = daily['LoiNhuan'].clip(lower=0)
 
-            # Padding trục y
             max_y_value = max(daily['ThanhTien'].max(), daily['LoiNhuan'].max())
             if max_y_value == 0:
                 max_y_value = 100000
