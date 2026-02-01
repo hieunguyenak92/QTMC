@@ -1,4 +1,3 @@
-
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -30,14 +29,11 @@ def safe_get_data(worksheet):
         data = worksheet.get_all_values()
         if not data: return pd.DataFrame()
         
-        # Lay header
         headers = data[0]
         rows = data[1:]
         
-        # Tao dataframe
         df = pd.DataFrame(rows)
         
-        # Xu ly header trung
         seen = {}
         clean_headers = []
         for i, h in enumerate(headers):
@@ -50,11 +46,9 @@ def safe_get_data(worksheet):
                 seen[h] = 0
             clean_headers.append(h)
             
-        # Gan header neu so luong khop
         if len(df.columns) == len(clean_headers):
             df.columns = clean_headers
         else:
-            # Truong hop lech cot, chi lay du lieu co the
             df = df.iloc[:, :len(clean_headers)]
             df.columns = clean_headers[:df.shape[1]]
             
@@ -72,7 +66,6 @@ def load_inventory():
             wks = sh.worksheet("TonKho")
             df = safe_get_data(wks)
             
-            # Chuan hoa so lieu
             numeric_cols = ['SoLuong', 'GiaNhap', 'GiaBan']
             for col in numeric_cols:
                 if col in df.columns:
@@ -82,7 +75,7 @@ def load_inventory():
             return pd.DataFrame()
     return pd.DataFrame()
 
-# --- 2. TAI LICH SU BAN (FIX TUYET DOI) ---
+# --- 2. TAI LICH SU BAN ---
 def load_sales_history():
     sh = get_connection()
     if sh:
@@ -90,7 +83,6 @@ def load_sales_history():
             wks = sh.worksheet("LichSuBan")
             data = wks.get_all_values()
             
-            # Danh sach cot chuan (10 cot)
             COL_NAMES = [
                 'NgayBan', 'MaDonHang', 'MaSanPham', 'TenSanPham', 
                 'DonVi', 'SoLuong', 'GiaBan', 'ThanhTien', 
@@ -100,22 +92,18 @@ def load_sales_history():
             if len(data) < 2:
                 return pd.DataFrame(columns=COL_NAMES)
 
-            rows = data[1:] # Bo header goc
+            rows = data[1:]
             
-            # CHUAN HOA: Dam bao moi dong deu du 10 cot
             normalized_rows = []
             for row in rows:
-                # Neu thieu cot -> them ''
                 if len(row) < len(COL_NAMES):
                     row += [''] * (len(COL_NAMES) - len(row))
-                # Neu thua cot -> cat bot
                 elif len(row) > len(COL_NAMES):
                     row = row[:len(COL_NAMES)]
                 normalized_rows.append(row)
             
             df = pd.DataFrame(normalized_rows, columns=COL_NAMES)
 
-            # Convert Data Type
             if 'NgayBan' in df.columns:
                 df['NgayBan'] = pd.to_datetime(df['NgayBan'], errors='coerce')
                 
@@ -148,7 +136,6 @@ def process_checkout(cart_items):
             ma_sp = str(item['MaSanPham'])
             qty_sell = item['SoLuongBan']
             
-            # Tim vi tri
             match_idx = df_inv.index[df_inv['MaSanPham'] == ma_sp].tolist()
             
             if match_idx:
@@ -157,25 +144,22 @@ def process_checkout(cart_items):
                 cost_price = float(df_inv.at[idx, 'GiaNhap'])
                 
                 new_qty = current_qty - qty_sell
-                
-                # Update Inventory (Row + 2)
                 ws_inventory.update_cell(idx + 2, 4, new_qty)
                 
                 revenue = item['GiaBan'] * qty_sell
                 profit = (item['GiaBan'] - cost_price) * qty_sell
                 
-                # Save (Dung thu tu voi load_sales_history)
                 sales_rows.append([
-                    timestamp,      # 0
-                    order_id,       # 1
-                    ma_sp,          # 2
-                    item['TenSanPham'], # 3
-                    item['DonVi'],  # 4
-                    qty_sell,       # 5
-                    item['GiaBan'], # 6
-                    revenue,        # 7
-                    cost_price,     # 8
-                    profit          # 9
+                    timestamp,
+                    order_id,
+                    ma_sp,
+                    item['TenSanPham'],
+                    item['DonVi'],
+                    qty_sell,
+                    item['GiaBan'],
+                    revenue,
+                    cost_price,
+                    profit
                 ])
         
         if sales_rows:
@@ -237,7 +221,7 @@ def process_import(import_list):
         st.error(f"Lỗi nhập hàng: {str(e)}")
         return False
 
-# --- 5. XU LY HOAN TRA (CHINH XAC) ---
+# --- 5. XU LY HOAN TRA (CHUẨN: THÊM DÒNG ÂM) ---
 def process_return(order_id, product_id, qty_return):
     sh = get_connection()
     if not sh: return False
@@ -246,34 +230,44 @@ def process_return(order_id, product_id, qty_return):
         ws_sales = sh.worksheet("LichSuBan")
         ws_inventory = sh.worksheet("TonKho")
 
-        # Load raw data
         records = ws_sales.get_all_values()
-        row_to_delete = -1
-        
-        # Duyet tu duoi len
-        for i in range(len(records) - 1, 0, -1):
+        original_row = None
+        for i in range(1, len(records)):
             row = records[i]
-            # row[1]=MaDonHang, row[2]=MaSanPham
-            if len(row) > 2:
-                r_order = str(row[1]).strip()
-                r_sp = str(row[2]).strip()
-                if r_order == str(order_id) and r_sp == str(product_id):
-                     row_to_delete = i + 1
-                     break
-        
-        if row_to_delete == -1: return False
+            if len(row) >= 10 and str(row[1]).strip() == str(order_id) and str(row[2]).strip() == str(product_id):
+                original_row = row
+                break
 
-        # Cong kho
+        if not original_row:
+            return False
+
+        gia_ban = float(original_row[6] or 0)
+        gia_von = float(original_row[8] or 0)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return_order_id = order_id + "_RET"
+
+        ws_sales.append_row([
+            timestamp,
+            return_order_id,
+            product_id,
+            original_row[3],
+            original_row[4],
+            -qty_return,
+            gia_ban,
+            -gia_ban * qty_return,
+            gia_von,
+            -(gia_ban - gia_von) * qty_return
+        ])
+
         df_inv = safe_get_data(ws_inventory)
         match_idx = df_inv.index[df_inv['MaSanPham'] == str(product_id)].tolist()
         if match_idx:
             idx = match_idx[0]
             current_qty = float(df_inv.at[idx, 'SoLuong'])
-            new_qty = current_qty + float(qty_return)
-            ws_inventory.update_cell(idx + 2, 4, new_qty)
+            ws_inventory.update_cell(idx + 2, 4, current_qty + qty_return)
 
-        ws_sales.delete_rows(row_to_delete)
         st.cache_data.clear()
         return True
-    except:
+    except Exception as e:
+        st.error(f"Lỗi hoàn trả: {e}")
         return False
