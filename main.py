@@ -12,7 +12,6 @@ st.set_page_config(
     page_icon="assets/logo.png"
 )
 
-# Custom CSS giữ nguyên
 st.markdown("""
 <style>
     .stButton>button {width: 100%; border-radius: 5px; height: 3em; font-weight: bold;}
@@ -44,7 +43,7 @@ if 'import_cart' not in st.session_state:
 def format_currency(amount):
     return f"{amount:,.0f} đ"
 
-# --- RENDER HEADER (GIỮ NGUYÊN HOÀN TOÀN NHƯ CŨ) ---
+# --- RENDER HEADER ---
 def render_header():
     c1, c2 = st.columns([1, 8])
     with c1:
@@ -74,7 +73,7 @@ def render_login():
                 else:
                     st.error("Sai mật khẩu!")
 
-# --- 2. MAN HINH BAN HANG (CẢI THIỆN TÌM KIẾM) ---
+# --- 2. MAN HINH BAN HANG (GIỮ NGUYÊN + TÌM KIẾM CẢI THIỆN) ---
 def render_sales(df_inv):
     st.subheader("🛒 Bán Hàng Tại Quầy")
     col_search, col_cart = st.columns([5, 5], gap="large")
@@ -211,7 +210,7 @@ def render_import(df_inv):
                 st.success("Đã nhập kho thành công!")
                 st.rerun()
 
-# --- 4. MAN HINH BAO CAO (FIX + THÊM TÍNH NĂNG) ---
+# --- 4. MAN HINH BAO CAO (FIX BIỂU ĐỒ THÁNG + THÊM NHIỀU TÍNH NĂNG MỚI) ---
 def render_reports(df_inv):
     st.subheader("📊 Báo Cáo Hệ Thống")
     
@@ -244,9 +243,24 @@ def render_reports(df_inv):
             st.info("Chưa có dữ liệu kho.")
 
     with t2:
-        st.write("### 📋 Danh sách hàng bán trong ngày")
+        # THÊM: Doanh thu hôm nay (metric nổi bật)
         if not df_sales.empty and 'NgayBan' in df_sales.columns:
             df_sales['NgayBan'] = pd.to_datetime(df_sales['NgayBan'])
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            df_today_sales = df_sales[(df_sales['NgayBan'].dt.strftime('%Y-%m-%d') == today_str) & (df_sales['SoLuong'] > 0)]
+            
+            today_revenue = df_today_sales['ThanhTien'].sum()
+            today_profit = df_today_sales['LoiNhuan'].sum()
+            today_orders = df_today_sales['MaDonHang'].nunique()
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Doanh thu hôm nay", format_currency(today_revenue))
+            col2.metric("Lợi nhuận hôm nay", format_currency(today_profit))
+            col3.metric("Số đơn hàng hôm nay", today_orders)
+            st.divider()
+
+        st.write("### 📋 Danh sách hàng bán trong ngày")
+        if not df_sales.empty and 'NgayBan' in df_sales.columns:
             today = datetime.now().strftime('%Y-%m-%d')
             df_today = df_sales[df_sales['NgayBan'].dt.strftime('%Y-%m-%d') == today].copy()
             
@@ -271,30 +285,79 @@ def render_reports(df_inv):
         
         df_month = df_sales[df_sales['NgayBan'].dt.month == datetime.now().month].copy()
         if not df_month.empty:
+            # THÊM: Top 10 bán chạy tháng này (giữ nguyên cũ)
             st.write("### 🔥 Top 10 sản phẩm bán chạy tháng này")
             top10 = df_month[df_month['SoLuong'] > 0].groupby(['MaSanPham', 'TenSanPham'])['SoLuong'].sum().reset_index()
             top10 = top10.sort_values('SoLuong', ascending=False).head(10)
             st.dataframe(top10, use_container_width=True)
+            
+            # THÊM: Biểu đồ doanh thu theo sản phẩm top 10 tháng này
+            st.write("### 📊 Doanh thu theo sản phẩm (Top 10 tháng này)")
+            top10_revenue = df_month[df_month['SoLuong'] > 0].groupby('TenSanPham')['ThanhTien'].sum().reset_index()
+            top10_revenue = top10_revenue.sort_values('ThanhTien', ascending=False).head(10)
+            fig_prod = go.Figure(go.Bar(
+                x=top10_revenue['ThanhTien'],
+                y=top10_revenue['TenSanPham'],
+                orientation='h',
+                marker_color='#0068C9'
+            ))
+            fig_prod.update_layout(yaxis={'categoryorder':'total ascending'}, xaxis_title="Doanh thu (đ)", height=400)
+            st.plotly_chart(fig_prod, use_container_width=True)
+            
+            # THÊM: Top 10 bán chạy toàn thời gian
+            st.write("### 🔥 Top 10 sản phẩm bán chạy toàn thời gian")
+            top10_all = df_sales[df_sales['SoLuong'] > 0].groupby(['MaSanPham', 'TenSanPham'])['SoLuong'].sum().reset_index()
+            top10_all = top10_all.sort_values('SoLuong', ascending=False).head(10)
+            st.dataframe(top10_all, use_container_width=True)
         
+        # FIX DỨT ĐIỂM BIỂU ĐỒ THÁNG
         st.write("### 📈 Doanh thu & Lợi nhuận tháng này")
         if not df_month.empty:
             current_year = datetime.now().year
             current_month = datetime.now().month
-            days_in_month = pd.date_range(start=f"{current_year}-{current_month:02d}-01", end=datetime.now().strftime('%Y-%m-%d'), freq='D')
-            daily_full = pd.DataFrame({'Ngay': days_in_month})
-            daily_full['day'] = daily_full['Ngay'].dt.day
+            last_day = datetime.now().day
+            
+            # Tạo full ngày 1 -> hôm nay
+            days_in_month = pd.date_range(
+                start=f"{current_year}-{current_month:02d}-01",
+                end=datetime.now().strftime('%Y-%m-%d'),
+                freq='D'
+            )
+            daily_full = pd.DataFrame({'day': days_in_month.dt.day})
 
+            # Group data
             daily = df_month.groupby(df_month['NgayBan'].dt.day)[['ThanhTien', 'LoiNhuan']].sum().reset_index()
             daily.rename(columns={'NgayBan': 'day'}, inplace=True)
 
+            # Merge + fill 0 + ép int
             daily = daily_full.merge(daily, on='day', how='left').fillna(0)
+            daily['day'] = daily['day'].astype(int)
             daily['ThanhTien'] = daily['ThanhTien'].clip(lower=0)
             daily['LoiNhuan'] = daily['LoiNhuan'].clip(lower=0)
 
             fig = go.Figure()
-            fig.add_trace(go.Bar(x=daily['day'], y=daily['ThanhTien'], name="Doanh Thu", marker_color='#0068C9'))
-            fig.add_trace(go.Scatter(x=daily['day'], y=daily['LoiNhuan'], name="Lợi Nhuận", mode='lines+markers', line=dict(color='red', width=3)))
-            fig.update_layout(title="Doanh thu & Lợi nhuận theo ngày", xaxis_title="Ngày", yaxis_title="Số tiền (đ)", yaxis=dict(range=[0, None]))
+            fig.add_trace(go.Bar(
+                x=daily['day'],
+                y=daily['ThanhTien'],
+                name="Doanh Thu",
+                marker_color='#0068C9'
+            ))
+            fig.add_trace(go.Scatter(
+                x=daily['day'],
+                y=daily['LoiNhuan'],
+                name="Lợi Nhuận",
+                mode='lines+markers',
+                line=dict(color='red', width=3),
+                marker=dict(size=8)
+            ))
+
+            fig.update_layout(
+                title=f"Doanh thu & Lợi nhuận tháng {current_month}/{current_year}",
+                xaxis_title="Ngày",
+                yaxis_title="Số tiền (đ)",
+                yaxis=dict(range=[0, None]),
+                xaxis=dict(type='category', tickmode='linear')  # FIX CHÍNH: trục x category + linear
+            )
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Tháng này chưa có dữ liệu bán hàng.")
@@ -321,7 +384,8 @@ def render_reports(df_inv):
                     title=f"Doanh thu & Lợi nhuận năm {current_year}",
                     xaxis_title="Tháng",
                     yaxis=dict(title="Doanh thu (Triệu đ)", range=[0, None]),
-                    yaxis2=dict(title="Lợi nhuận (Triệu đ)", overlaying="y", side="right", range=[0, None])
+                    yaxis2=dict(title="Lợi nhuận (Triệu đ)", overlaying="y", side="right", range=[0, None]),
+                    xaxis=dict(type='category')
                 )
                 st.plotly_chart(fig_year, use_container_width=True)
             else:
@@ -345,7 +409,7 @@ def main():
             if st.button("Đăng Xuất"):
                 st.session_state['is_logged_in'] = False
                 st.rerun()
-            st.caption("Minh Châu 24h v2.5")  # Giữ nguyên như code gốc của bạn
+            st.caption("Minh Châu 24h v2.5")
 
         render_header()
         
