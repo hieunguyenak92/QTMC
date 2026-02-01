@@ -276,3 +276,38 @@ def process_return(order_id, product_id, qty_return):
         return True
     except:
         return False
+# --- BỔ SUNG VÀO data_manager.py ---
+
+# 1. Hàm tải chi phí
+def load_expenses():
+    sh = get_connection()
+    if sh:
+        try:
+            # Hãy chắc chắn bạn đã tạo sheet "SoQuy"
+            wks = sh.worksheet("SoQuy") 
+            df = safe_get_data(wks)
+            if not df.empty and 'SoTien' in df.columns:
+                df['SoTien'] = pd.to_numeric(df['SoTien'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+            return df
+        except:
+            return pd.DataFrame() # Trả về rỗng nếu chưa có sheet
+    return pd.DataFrame()
+
+# 2. Hàm ghi chi phí
+def add_expense(date, ex_type, amount, reason):
+    sh = get_connection()
+    if not sh: return False
+    try:
+        try:
+            wks = sh.worksheet("SoQuy")
+        except:
+            # Tự động tạo sheet nếu chưa có
+            wks = sh.add_worksheet(title="SoQuy", rows=100, cols=10)
+            wks.append_row(["Ngay", "Loai", "SoTien", "LyDo"])
+            
+        wks.append_row([str(date), ex_type, amount, reason])
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Lỗi ghi sổ: {e}")
+        return False
