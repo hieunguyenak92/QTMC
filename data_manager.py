@@ -27,17 +27,21 @@ def get_connection():
 def safe_get_data(worksheet):
     try:
         data = worksheet.get_all_values()
-        if not data:
-            return pd.DataFrame()
+        if not data: return pd.DataFrame()
         
+        # Lay header
         headers = data[0]
         rows = data[1:]
         
+        # Tao dataframe
+        df = pd.DataFrame(rows)
+        
+        # Xu ly header trung
         seen = {}
         clean_headers = []
         for i, h in enumerate(headers):
             h = str(h).strip()
-            if not h: h = f"Column_{i}"
+            if not h: h = f"Col_{i}"
             if h in seen:
                 seen[h] += 1
                 h = f"{h}_{seen[h]}"
@@ -45,13 +49,20 @@ def safe_get_data(worksheet):
                 seen[h] = 0
             clean_headers.append(h)
             
-        df = pd.DataFrame(rows, columns=clean_headers)
+        # Gan header neu so luong khop
+        if len(df.columns) == len(clean_headers):
+            df.columns = clean_headers
+        else:
+            # Truong hop lech cot, chi lay du lieu co the
+            df = df.iloc[:, :len(clean_headers)]
+            df.columns = clean_headers[:df.shape[1]]
+            
         return df
     except Exception as e:
-        st.error(f"Lỗi đọc dữ liệu sheet: {e}")
+        st.error(f"Lỗi đọc dữ liệu: {e}")
         return pd.DataFrame()
 
-# --- 1. TAI TON KHO (CÓ CACHE) ---
+# --- 1. TAI TON KHO ---
 @st.cache_data(ttl=60)
 def load_inventory():
     sh = get_connection()
@@ -60,72 +71,60 @@ def load_inventory():
             wks = sh.worksheet("TonKho")
             df = safe_get_data(wks)
             
-            # Đảm bảo các cột quan trọng tồn tại
-            expected_cols = ['MaSanPham', 'TenSanPham', 'SoLuong', 'GiaBan', 'GiaNhap', 'DonVi']
-            for col in expected_cols:
-                if col not in df.columns:
-                    # Nếu thiếu cột, tạo cột rỗng để không lỗi app
-                    df[col] = 0 if 'Gia' in col or 'SoLuong' in col else ""
-
+            # Chuan hoa so lieu
             numeric_cols = ['SoLuong', 'GiaNhap', 'GiaBan']
             for col in numeric_cols:
-                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
             return df
-        except Exception as e:
-            st.error(f"Lỗi tải tồn kho: {e}")
+        except:
+            return pd.DataFrame()
     return pd.DataFrame()
 
-# --- 2. TAI LICH SU BAN (FIX KEYERROR DỨT ĐIỂM) ---
+# --- 2. TAI LICH SU BAN (FIX TUYET DOI) ---
 def load_sales_history():
     sh = get_connection()
     if sh:
         try:
             wks = sh.worksheet("LichSuBan")
-            # Lấy toàn bộ dữ liệu thô (list of lists)
             data = wks.get_all_values()
             
-            # Nếu chỉ có header hoặc trống thì trả về rỗng
-            if len(data) < 2: 
-                return pd.DataFrame(columns=['NgayBan', 'MaDonHang', 'MaSanPham', 'TenSanPham', 'DonVi', 'SoLuong', 'GiaBan', 'ThanhTien'])
-
-            # Bỏ dòng header của Google Sheet, chỉ lấy dữ liệu
-            rows = data[1:]
-            
-            # Tạo DataFrame mới
-            df = pd.DataFrame(rows)
-            
-            # ĐỊNH NGHĨA LẠI TÊN CỘT THEO ĐÚNG THỨ TỰ (Mapping)
-            # Điều này đảm bảo dù trên Sheet bạn đặt tên là gì, Code vẫn hiểu đúng.
-            # Cấu trúc lưu: [0:Ngay, 1:MaDon, 2:MaSP, 3:Ten, 4:DonVi, 5:SL, 6:Gia, 7:Tong, 8:Von, 9:Lai]
-            
-            # Chỉ lấy số lượng cột có dữ liệu thực tế để tránh lỗi lệch cột
-            num_cols = df.shape[1]
-            
-            # Danh sách tên cột chuẩn mà Code main.py đang cần
-            standard_headers = [
+            # Danh sach cot chuan (10 cot)
+            COL_NAMES = [
                 'NgayBan', 'MaDonHang', 'MaSanPham', 'TenSanPham', 
                 'DonVi', 'SoLuong', 'GiaBan', 'ThanhTien', 
                 'GiaVonLucBan', 'LoiNhuan'
             ]
             
-            # Gán tên cột cho DataFrame
-            # Nếu file Excel có nhiều cột hơn chuẩn, giữ nguyên các cột thừa
-            # Nếu ít hơn, chỉ gán cho số lượng cột hiện có
-            current_headers = standard_headers[:num_cols] + [f"Col_{i}" for i in range(len(standard_headers), num_cols)]
-            df.columns = current_headers
+            if len(data) < 2:
+                return pd.DataFrame(columns=COL_NAMES)
 
-            # Xử lý dữ liệu
+            rows = data[1:] # Bo header goc
+            
+            # CHUAN HOA: Dam bao moi dong deu du 10 cot
+            normalized_rows = []
+            for row in rows:
+                # Neu thieu cot -> them ''
+                if len(row) < len(COL_NAMES):
+                    row += [''] * (len(COL_NAMES) - len(row))
+                # Neu thua cot -> cat bot
+                elif len(row) > len(COL_NAMES):
+                    row = row[:len(COL_NAMES)]
+                normalized_rows.append(row)
+            
+            df = pd.DataFrame(normalized_rows, columns=COL_NAMES)
+
+            # Convert Data Type
             if 'NgayBan' in df.columns:
                 df['NgayBan'] = pd.to_datetime(df['NgayBan'], errors='coerce')
                 
             numeric_cols = ['SoLuong', 'GiaBan', 'ThanhTien', 'GiaVonLucBan', 'LoiNhuan']
             for col in numeric_cols:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
             
             return df
         except Exception as e:
-            st.warning(f"Chưa tải được lịch sử bán: {str(e)}")
+            st.warning(f"Lỗi tải lịch sử: {e}")
             return pd.DataFrame()
     return pd.DataFrame()
 
@@ -148,7 +147,7 @@ def process_checkout(cart_items):
             ma_sp = str(item['MaSanPham'])
             qty_sell = item['SoLuongBan']
             
-            # Tìm vị trí sản phẩm
+            # Tim vi tri
             match_idx = df_inv.index[df_inv['MaSanPham'] == ma_sp].tolist()
             
             if match_idx:
@@ -164,18 +163,18 @@ def process_checkout(cart_items):
                 revenue = item['GiaBan'] * qty_sell
                 profit = (item['GiaBan'] - cost_price) * qty_sell
                 
-                # LƯU Ý THỨ TỰ CỘT NÀY PHẢI KHỚP VỚI HÀM LOAD Ở TRÊN
+                # Save (Dung thu tu voi load_sales_history)
                 sales_rows.append([
-                    timestamp,      # 0: NgayBan
-                    order_id,       # 1: MaDonHang
-                    ma_sp,          # 2: MaSanPham
-                    item['TenSanPham'], # 3: TenSanPham
-                    item['DonVi'],  # 4: DonVi
-                    qty_sell,       # 5: SoLuong
-                    item['GiaBan'], # 6: GiaBan
-                    revenue,        # 7: ThanhTien
-                    cost_price,     # 8: GiaVon
-                    profit          # 9: LoiNhuan
+                    timestamp,      # 0
+                    order_id,       # 1
+                    ma_sp,          # 2
+                    item['TenSanPham'], # 3
+                    item['DonVi'],  # 4
+                    qty_sell,       # 5
+                    item['GiaBan'], # 6
+                    revenue,        # 7
+                    cost_price,     # 8
+                    profit          # 9
                 ])
         
         if sales_rows:
@@ -184,7 +183,7 @@ def process_checkout(cart_items):
             return True
             
     except Exception as e:
-        st.error(f"Lỗi hệ thống khi lưu đơn: {str(e)}")
+        st.error(f"Lỗi: {str(e)}")
         return False
     return False
 
@@ -196,7 +195,6 @@ def process_import(import_list):
     try:
         ws_inventory = sh.worksheet("TonKho")
         ws_import = sh.worksheet("LichSuNhap")
-        
         df_inv = safe_get_data(ws_inventory)
         
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -220,21 +218,14 @@ def process_import(import_list):
             if exists:
                 current_qty = float(df_inv.at[row_idx_update, 'SoLuong'])
                 new_qty = current_qty + qty_in
-                
                 ws_inventory.update_cell(row_idx_update + 2, 4, new_qty) 
                 ws_inventory.update_cell(row_idx_update + 2, 5, price_in) 
                 ws_inventory.update_cell(row_idx_update + 2, 6, price_out)
             else:
-                new_row = [
-                    ma_sp, item['TenSanPham'], item['DonVi'], 
-                    qty_in, price_in, price_out, item.get('NhaCungCap', '')
-                ]
+                new_row = [ma_sp, item['TenSanPham'], item['DonVi'], qty_in, price_in, price_out, item.get('NhaCungCap', '')]
                 ws_inventory.append_row(new_row)
             
-            import_log_rows.append([
-                timestamp, ma_sp, item['TenSanPham'], item.get('NhaCungCap', ''),
-                item['DonVi'], qty_in, price_in, qty_in * price_in
-            ])
+            import_log_rows.append([timestamp, ma_sp, item['TenSanPham'], item.get('NhaCungCap', ''), item['DonVi'], qty_in, price_in, qty_in * price_in])
             
         if import_log_rows:
             ws_import.append_rows(import_log_rows)
@@ -245,8 +236,8 @@ def process_import(import_list):
         st.error(f"Lỗi nhập hàng: {str(e)}")
         return False
 
-# --- 5. XU LY HOAN TRA / XOA DON ---
-def process_return(order_id, product_id, qty_return, original_time):
+# --- 5. XU LY HOAN TRA (CHINH XAC) ---
+def process_return(order_id, product_id, qty_return):
     sh = get_connection()
     if not sh: return False
 
@@ -254,43 +245,34 @@ def process_return(order_id, product_id, qty_return, original_time):
         ws_sales = sh.worksheet("LichSuBan")
         ws_inventory = sh.worksheet("TonKho")
 
-        # Load toàn bộ data để tìm dòng xóa
+        # Load raw data
         records = ws_sales.get_all_values()
         row_to_delete = -1
         
-        # Duyệt ngược từ dưới lên (đơn mới nhất)
+        # Duyet tu duoi len
         for i in range(len(records) - 1, 0, -1):
             row = records[i]
-            # row[1] là cột thứ 2 (MaDonHang)
-            # row[2] là cột thứ 3 (MaSanPham)
+            # row[1]=MaDonHang, row[2]=MaSanPham
             if len(row) > 2:
                 r_order = str(row[1]).strip()
                 r_sp = str(row[2]).strip()
-                
                 if r_order == str(order_id) and r_sp == str(product_id):
                      row_to_delete = i + 1
                      break
         
-        if row_to_delete == -1:
-            st.error("Không tìm thấy đơn hàng gốc để hoàn trả!")
-            return False
+        if row_to_delete == -1: return False
 
-        # Cộng lại kho
+        # Cong kho
         df_inv = safe_get_data(ws_inventory)
         match_idx = df_inv.index[df_inv['MaSanPham'] == str(product_id)].tolist()
-        
         if match_idx:
             idx = match_idx[0]
             current_qty = float(df_inv.at[idx, 'SoLuong'])
             new_qty = current_qty + float(qty_return)
             ws_inventory.update_cell(idx + 2, 4, new_qty)
 
-        # Xóa dòng lịch sử
         ws_sales.delete_rows(row_to_delete)
-        
         st.cache_data.clear()
         return True
-
-    except Exception as e:
-        st.error(f"Lỗi xử lý hoàn trả: {e}")
+    except:
         return False
