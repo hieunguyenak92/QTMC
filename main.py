@@ -173,16 +173,17 @@ def render_import(df_inv):
                 st.rerun()
 
 # --- PHẦN 4: BÁO CÁO (ĐÃ NÂNG CẤP & SỬA LỖI) ---
+# --- HÀM BÁO CÁO (ĐÃ FIX TRỤC HOÀNH TRIỆT ĐỂ) ---
 def render_reports(df_inv):
     st.subheader("📊 Trung Tâm Báo Cáo & Phân Tích")
     
     # Load dữ liệu
     df_sales = dm.load_sales_history()
-    df_expenses = dm.load_expenses() # Cần thêm hàm này trong data_manager
+    df_expenses = dm.load_expenses() 
     
     tabs = st.tabs(["💵 Sổ Quỹ & Lãi Ròng", "📅 Doanh Thu Tháng", "📈 Hiệu Quả Năm", "📦 Tồn Kho"])
     
-    # --- TAB 1: SỔ QUỸ & LÃI RÒNG (TÍNH NĂNG MỚI) ---
+    # --- TAB 1: SỔ QUỸ (Giữ nguyên logic cũ) ---
     with tabs[0]:
         c1, c2 = st.columns([1, 2])
         with c1:
@@ -202,128 +203,131 @@ def render_reports(df_inv):
             this_month = datetime.now().month
             this_year = datetime.now().year
             
-            # Tính toán
             revenue = 0
-            cogs = 0 # Giá vốn
+            cogs = 0
             expenses = 0
             
             if not df_sales.empty:
+                # Chuyển đổi sang datetime nếu chưa phải
+                if not pd.api.types.is_datetime64_any_dtype(df_sales['NgayBan']):
+                    df_sales['NgayBan'] = pd.to_datetime(df_sales['NgayBan'])
+                
                 df_s_month = df_sales[(df_sales['NgayBan'].dt.month == this_month) & (df_sales['NgayBan'].dt.year == this_year)]
                 revenue = df_s_month['ThanhTien'].sum()
                 cogs = df_s_month['GiaVonLucBan'].sum() if 'GiaVonLucBan' in df_s_month.columns else 0
             
             if not df_expenses.empty:
-                df_e_month = df_expenses[(pd.to_datetime(df_expenses['Ngay']).dt.month == this_month)]
+                if not pd.api.types.is_datetime64_any_dtype(df_expenses['Ngay']):
+                    df_expenses['Ngay'] = pd.to_datetime(df_expenses['Ngay'])
+                df_e_month = df_expenses[(df_expenses['Ngay'].dt.month == this_month)]
                 expenses = df_e_month['SoTien'].sum()
                 
             gross_profit = revenue - cogs
             net_profit = gross_profit - expenses
             
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Doanh Thu", f"{revenue/1e6:.1f}M")
-            m2.metric("Lợi Nhuận Gộp", f"{gross_profit/1e6:.1f}M", delta=f"{(gross_profit/revenue)*100:.1f}%" if revenue else "0%")
-            m3.metric("Chi Phí", f"-{expenses/1e6:.1f}M")
-            m4.metric("LÃI RÒNG", f"{net_profit/1e6:.1f}M", delta_color="normal")
-            
-            st.progress(max(0, min(1.0, net_profit / revenue)) if revenue > 0 else 0)
+            m1.metric("Doanh Thu", f"{revenue:,.0f}")
+            m2.metric("Lợi Nhuận Gộp", f"{gross_profit:,.0f}", delta=f"{(gross_profit/revenue)*100:.1f}%" if revenue else "0%")
+            m3.metric("Chi Phí", f"-{expenses:,.0f}")
+            m4.metric("LÃI RÒNG", f"{net_profit:,.0f}", delta_color="normal")
 
-    # --- TAB 2: DOANH THU THÁNG (ĐÃ FIX LỖI 1) ---
+    # --- TAB 2: BIỂU ĐỒ NGÀY (FIXED: KHÔNG CÒN SỐ ÂM) ---
     with tabs[1]:
         st.write(f"### 🗓 Diễn biến kinh doanh Tháng {datetime.now().month}")
+        
+        # 1. Tạo khung dữ liệu chuẩn từ ngày 1 đến 31 (Bắt buộc có đủ 31 ngày)
+        # Sử dụng hàm calendar để lấy số ngày chính xác của tháng hiện tại thì tốt hơn, nhưng để an toàn cứ lấy 31
+        days_range = list(range(1, 32)) 
+        chart_data = pd.DataFrame({'Day': days_range})
+        chart_data['ThanhTien'] = 0.0
+        chart_data['LoiNhuan'] = 0.0
+
         if not df_sales.empty:
             df_month = df_sales[(df_sales['NgayBan'].dt.month == datetime.now().month) & (df_sales['NgayBan'].dt.year == datetime.now().year)]
-            
-            # TẠO KHUNG DỮ LIỆU ĐẦY ĐỦ CHO THÁNG (1-31) ĐỂ TRÁNH BIỂU ĐỒ BỊ NGẮT QUÃNG
-            days_in_month = 31 # Đơn giản hóa, có thể dùng calendar.monthrange để chính xác
-            all_days = pd.DataFrame({'Day': range(1, days_in_month + 1)})
-            
-            daily_data = df_month.groupby(df_month['NgayBan'].dt.day)[['ThanhTien', 'LoiNhuan']].sum()
-            
-            # Merge để điền số 0 vào những ngày không bán
-            chart_data = pd.merge(all_days, daily_data, left_on='Day', right_index=True, how='left').fillna(0)
-            
-            fig = go.Figure()
-            # Cột Doanh Thu
-            fig.add_trace(go.Bar(
-                x=chart_data['Day'], 
-                y=chart_data['ThanhTien'], 
-                name="Doanh Thu",
-                marker_color='#2E86C1'
-            ))
-            # Đường Lợi Nhuận
-            fig.add_trace(go.Scatter(
-                x=chart_data['Day'], 
-                y=chart_data['LoiNhuan'], 
-                name="Lợi Nhuận",
-                line=dict(color='#E74C3C', width=3),
-                mode='lines+markers'
-            ))
-            
-            # FIX TRỤC X: Chỉ hiện số nguyên, range từ 1 đến 31, bỏ số âm
-            fig.update_layout(
-                xaxis=dict(
-                    tickmode='linear', 
-                    dtick=1, 
-                    range=[0.5, 31.5], # Khóa cứng trục X
-                    title="Ngày trong tháng"
-                ),
-                yaxis=dict(title="Số tiền (VNĐ)"),
-                legend=dict(orientation="h", y=1.1),
-                height=400,
-                margin=dict(l=20, r=20, t=40, b=20)
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.warning("Tháng này chưa có dữ liệu bán hàng.")
+            if not df_month.empty:
+                daily_data = df_month.groupby(df_month['NgayBan'].dt.day)[['ThanhTien', 'LoiNhuan']].sum()
+                # Map dữ liệu vào khung chuẩn
+                for day_idx in daily_data.index:
+                    chart_data.loc[chart_data['Day'] == day_idx, 'ThanhTien'] = daily_data.loc[day_idx, 'ThanhTien']
+                    chart_data.loc[chart_data['Day'] == day_idx, 'LoiNhuan'] = daily_data.loc[day_idx, 'LoiNhuan']
 
-    # --- TAB 3: HIỆU QUẢ NĂM (ĐÃ FIX LỖI 2) ---
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=chart_data['Day'], y=chart_data['ThanhTien'], 
+            name="Doanh Thu", marker_color='#2E86C1'
+        ))
+        fig.add_trace(go.Scatter(
+            x=chart_data['Day'], y=chart_data['LoiNhuan'], 
+            name="Lợi Nhuận", line=dict(color='#E74C3C', width=3), mode='lines+markers'
+        ))
+        
+        # --- FIX QUAN TRỌNG NHẤT Ở ĐÂY ---
+        fig.update_layout(
+            xaxis=dict(
+                tickmode='array',          # Chế độ mảng cố định
+                tickvals=days_range,       # Chỉ hiển thị các số: 1, 2, ..., 31
+                range=[0.5, 31.5],         # Khóa cứng khung nhìn
+                title="Ngày trong tháng",
+                fixedrange=True            # Không cho user zoom làm lệch trục
+            ),
+            yaxis=dict(title="Số tiền (VNĐ)"),
+            legend=dict(orientation="h", y=1.1),
+            height=450,
+            margin=dict(l=20, r=20, t=40, b=20)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    # --- TAB 3: BIỂU ĐỒ NĂM (FIXED: KHÔNG CÒN SỐ ÂM) ---
     with tabs[2]:
         st.write(f"### 📅 Tổng kết năm {datetime.now().year}")
+        
+        # 1. Tạo khung dữ liệu chuẩn 12 tháng
+        months_range = list(range(1, 13))
+        chart_year = pd.DataFrame({'Month': months_range})
+        chart_year['ThanhTien'] = 0.0
+        chart_year['LoiNhuan'] = 0.0
+        
         if not df_sales.empty:
             current_year = datetime.now().year
             df_year = df_sales[df_sales['NgayBan'].dt.year == current_year]
-            
-            # TẠO KHUNG DỮ LIỆU 12 THÁNG
-            all_months = pd.DataFrame({'Month': range(1, 13)})
-            monthly_data = df_year.groupby(df_year['NgayBan'].dt.month)[['ThanhTien', 'LoiNhuan']].sum()
-            
-            # Merge dữ liệu
-            chart_year = pd.merge(all_months, monthly_data, left_on='Month', right_index=True, how='left').fillna(0)
-            
-            fig_y = go.Figure()
-            fig_y.add_trace(go.Bar(
-                x=chart_year['Month'], 
-                y=chart_year['ThanhTien'], 
-                name="Doanh Thu", 
-                marker_color='#117A65'
-            ))
-            fig_y.add_trace(go.Scatter(
-                x=chart_year['Month'], 
-                y=chart_year['LoiNhuan'], 
-                name="Lợi Nhuận", 
-                line=dict(color='#F39C12', width=3),
-                yaxis="y2"
-            ))
-            
-            # FIX TRỤC X: Chỉ hiện 1-12
-            fig_y.update_layout(
-                xaxis=dict(
-                    tickmode='linear', 
-                    dtick=1, 
-                    range=[0.5, 12.5],
-                    title="Tháng"
-                ),
-                yaxis=dict(title="Doanh thu"),
-                yaxis2=dict(title="Lợi nhuận", overlaying="y", side="right", showgrid=False),
-                legend=dict(orientation="h", y=1.1)
-            )
-            st.plotly_chart(fig_y, use_container_width=True)
+            if not df_year.empty:
+                monthly_data = df_year.groupby(df_year['NgayBan'].dt.month)[['ThanhTien', 'LoiNhuan']].sum()
+                for m_idx in monthly_data.index:
+                    chart_year.loc[chart_year['Month'] == m_idx, 'ThanhTien'] = monthly_data.loc[m_idx, 'ThanhTien']
+                    chart_year.loc[chart_year['Month'] == m_idx, 'LoiNhuan'] = monthly_data.loc[m_idx, 'LoiNhuan']
+        
+        fig_y = go.Figure()
+        fig_y.add_trace(go.Bar(
+            x=chart_year['Month'], y=chart_year['ThanhTien'], 
+            name="Doanh Thu", marker_color='#117A65'
+        ))
+        fig_y.add_trace(go.Scatter(
+            x=chart_year['Month'], y=chart_year['LoiNhuan'], 
+            name="Lợi Nhuận", line=dict(color='#F39C12', width=3), yaxis="y2"
+        ))
+        
+        # --- FIX QUAN TRỌNG NHẤT Ở ĐÂY ---
+        fig_y.update_layout(
+            xaxis=dict(
+                tickmode='array',           # Chế độ mảng cố định
+                tickvals=months_range,      # Chỉ hiện số 1 đến 12
+                ticktext=[f"T{i}" for i in months_range], # Hiển thị T1, T2... cho gọn
+                range=[0.5, 12.5],          # Khóa cứng khung nhìn
+                title="Tháng",
+                fixedrange=True
+            ),
+            yaxis=dict(title="Doanh thu"),
+            yaxis2=dict(title="Lợi nhuận", overlaying="y", side="right", showgrid=False),
+            legend=dict(orientation="h", y=1.1)
+        )
+        st.plotly_chart(fig_y, use_container_width=True)
 
     with tabs[3]:
         st.write("### 📦 Giá Trị Kho Hàng")
         if not df_inv.empty:
-            total_val = (df_inv['SoLuong'] * df_inv['GiaNhap']).sum()
-            st.metric("Tổng vốn tồn kho", format_currency(total_val))
+            if 'SoLuong' in df_inv.columns and 'GiaNhap' in df_inv.columns:
+                total_val = (pd.to_numeric(df_inv['SoLuong']) * pd.to_numeric(df_inv['GiaNhap'])).sum()
+                st.metric("Tổng vốn tồn kho", f"{total_val:,.0f} đ")
             st.dataframe(df_inv, use_container_width=True)
 
 def main():
