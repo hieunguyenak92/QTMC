@@ -3,17 +3,21 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 from datetime import datetime
+import re  # Thêm để clean symbol robust hơn
 
-# CLEAN PRICE DỨT ĐIỂM CHO GIÁ TIỀN NGUYÊN (INTEGER) - LOẠI BỎ MỌI DẤU PHẨY, CHẤM, KHOẢNG TRẮNG
+# CLEAN PRICE CHUẨN (HANDLE CẢ MỸ & VIỆT LOCALE, LOẠI SYMBOL)
 def clean_to_float(s):
     if pd.isna(s):
         return 0.0
-    # Chuyển thành string, loại bỏ mọi ký tự không phải số
-    digits = ''.join(filter(str.isdigit, str(s)))
-    # Nếu không có số nào thì trả về 0
-    if not digits:
+    s = str(s).strip().replace(' ', '')
+    # Loại bỏ symbol tiền tệ/non-digit (₫, đ, VND, $, etc.)
+    s = re.sub(r'[^\d.,-]', '', s)
+    s = s.replace('.', '')  # Remove dot nghìn (Việt)
+    s = s.replace(',', '.')  # Comma thập phân (Việt) → dot chuẩn Python
+    try:
+        return float(s)
+    except:
         return 0.0
-    return float(digits)
 
 # --- KET NOI GOOGLE SHEET ---
 def get_connection():
@@ -68,7 +72,7 @@ def safe_get_data(worksheet):
         st.error(f"Lỗi đọc dữ liệu: {e}")
         return pd.DataFrame()
 
-# --- 1. TAI TON KHO (CLEAN PRICE TRIỆT ĐỂ) ---
+# --- 1. TAI TON KHO (CLEAN PRICE KHI LOAD) ---
 @st.cache_data(ttl=60)
 def load_inventory():
     sh = get_connection()
@@ -86,7 +90,7 @@ def load_inventory():
             return pd.DataFrame()
     return pd.DataFrame()
 
-# --- 2. TAI LICH SU BAN (CLEAN PRICE TRIỆT ĐỂ) ---
+# --- 2. TAI LICH SU BAN (CLEAN PRICE KHI LOAD) ---
 def load_sales_history():
     sh = get_connection()
     if sh:
@@ -140,7 +144,7 @@ def process_checkout(cart_items):
         
         df_inv = safe_get_data(ws_inventory)
         
-        # Clean giá nhập trong kho (an toàn)
+        # Apply clean cho df_inv (an toàn thêm)
         if 'GiaNhap' in df_inv.columns:
             df_inv['GiaNhap'] = df_inv['GiaNhap'].apply(clean_to_float)
         
@@ -150,9 +154,9 @@ def process_checkout(cart_items):
         
         for item in cart_items:
             ma_sp = str(item['MaSanPham'])
-            qty_sell = int(item['SoLuongBan'])
+            qty_sell = int(item['SoLuongBan'])  # SL luôn int
             
-            # Clean giá bán từ giỏ (hỗ trợ nếu là string)
+            # CLEAN GIÁ BÁN TỪ GIỎ (AN TOÀN DÙ STRING)
             gia_ban = clean_to_float(item['GiaBan'])
             
             match_idx = df_inv.index[df_inv['MaSanPham'] == ma_sp].tolist()
@@ -190,7 +194,6 @@ def process_checkout(cart_items):
         st.error(f"Lỗi: {str(e)}")
         return False
     return False
-
 # --- 4. XU LY NHAP HANG ---
 def process_import(import_list):
     sh = get_connection()
@@ -220,7 +223,7 @@ def process_import(import_list):
                     row_idx_update = matches[0]
             
             if exists:
-                current_qty = clean_to_float(df_inv.at[row_idx_update, 'SoLuong'])
+                current_qty = float(df_inv.at[row_idx_update, 'SoLuong'])
                 new_qty = current_qty + qty_in
                 ws_inventory.update_cell(row_idx_update + 2, 4, new_qty) 
                 ws_inventory.update_cell(row_idx_update + 2, 5, price_in) 
@@ -260,8 +263,8 @@ def process_return(order_id, product_id, qty_return):
         if not original_row:
             return False
 
-        gia_ban = clean_to_float(original_row[6] or 0)
-        gia_von = clean_to_float(original_row[8] or 0)
+        gia_ban = float(original_row[6] or 0)
+        gia_von = float(original_row[8] or 0)
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return_order_id = order_id + "_RET"
 
@@ -282,7 +285,7 @@ def process_return(order_id, product_id, qty_return):
         match_idx = df_inv.index[df_inv['MaSanPham'] == str(product_id)].tolist()
         if match_idx:
             idx = match_idx[0]
-            current_qty = clean_to_float(df_inv.at[idx, 'SoLuong'])
+            current_qty = float(df_inv.at[idx, 'SoLuong'])
             ws_inventory.update_cell(idx + 2, 4, current_qty + qty_return)
 
         st.cache_data.clear()
