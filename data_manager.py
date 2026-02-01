@@ -3,17 +3,29 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 from datetime import datetime
-import re  # Thêm để clean symbol robust hơn
+import re  # Để clean symbol robust
+import pytz  # Để set timezone VN
 
-# CLEAN PRICE CHUẨN (HANDLE CẢ MỸ & VIỆT LOCALE, LOẠI SYMBOL)
+# CLEAN PRICE CHUẨN (HANDLE CẢ US & VN LOCALE + SYMBOL + DECIMAL/ÂM)
 def clean_to_float(s):
     if pd.isna(s):
         return 0.0
     s = str(s).strip().replace(' ', '')
-    # Loại bỏ symbol tiền tệ/non-digit (₫, đ, VND, $, etc.)
+    # Loại symbol (₫, đ, VND, $, etc.)
     s = re.sub(r'[^\d.,-]', '', s)
-    s = s.replace('.', '')  # Remove dot nghìn (Việt)
-    s = s.replace(',', '.')  # Comma thập phân (Việt) → dot chuẩn Python
+    # Handle locale: Check vị trí , và . để quyết định separator
+    if ',' in s and '.' in s:
+        if s.rfind(',') > s.rfind('.'):  # VN: thập phân ,
+            s = s.replace('.', '')  # Loại nghìn .
+            s = s.replace(',', '.')  # Thập phân , -> .
+        else:  # US: thập phân .
+            s = s.replace(',', '')  # Loại nghìn ,
+            # Giữ . thập phân
+    elif ',' in s:  # Chỉ ,: coi là nghìn (US)
+        s = s.replace(',', '')
+    elif '.' in s:  # Chỉ .: coi là nghìn (VN) nếu no decimal, nhưng giữ nếu decimal
+        # Giả định nếu chỉ . và no sau, loại; nhưng để safe, dùng pd.to_numeric sau
+        pass
     try:
         return float(s)
     except:
@@ -41,6 +53,7 @@ def get_connection():
 # --- HAM HELPER: DOC DU LIEU AN TOAN ---
 def safe_get_data(worksheet):
     try:
+        # Giữ formatted để date là string; nếu cần unformatted: import gspread.utils.ValueRenderOption, rồi data = worksheet.get_all_values(value_render_option=ValueRenderOption.unformatted)
         data = worksheet.get_all_values()
         if not data: return pd.DataFrame()
         
@@ -149,8 +162,9 @@ def process_checkout(cart_items):
             df_inv['GiaNhap'] = df_inv['GiaNhap'].apply(clean_to_float)
         
         sales_rows = []
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        order_id = datetime.now().strftime("%Y%m%d%H%M%S")
+        tz = pytz.timezone('Asia/Ho_Chi_Minh')  # VN time
+        timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        order_id = datetime.now(tz).strftime("%Y%m%d%H%M%S")
         
         for item in cart_items:
             ma_sp = str(item['MaSanPham'])
@@ -204,7 +218,8 @@ def process_import(import_list):
         ws_import = sh.worksheet("LichSuNhap")
         df_inv = safe_get_data(ws_inventory)
         
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        tz = pytz.timezone('Asia/Ho_Chi_Minh')  # VN time
+        timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
         import_log_rows = []
         
         for item in import_list:
@@ -265,7 +280,8 @@ def process_return(order_id, product_id, qty_return):
 
         gia_ban = float(original_row[6] or 0)
         gia_von = float(original_row[8] or 0)
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        tz = pytz.timezone('Asia/Ho_Chi_Minh')  # VN time
+        timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
         return_order_id = order_id + "_RET"
 
         ws_sales.append_row([
