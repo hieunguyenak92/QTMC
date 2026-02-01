@@ -166,7 +166,7 @@ def render_sales(df_inv):
                                     "MaSanPham": selected_item['MaSanPham'],
                                     "TenSanPham": selected_item['TenSanPham'],
                                     "DonVi": selected_item['DonVi'],
-                                    "GiaBan": temp_price,  # Giá tạm thời
+                                    "GiaBan": temp_price,
                                     "SoLuongBan": qty_sell,
                                     "ThanhTien": qty_sell * temp_price
                                 })
@@ -174,6 +174,7 @@ def render_sales(df_inv):
                                 st.rerun()
                             else:
                                 st.error("Vui lòng nhập nhanh bổ sung tồn kho bên trên trước!")
+
             else:
                 st.warning("Không tìm thấy sản phẩm nào.")
         else:
@@ -183,8 +184,7 @@ def render_sales(df_inv):
         st.info("Giỏ hàng hiện tại")
         if st.session_state['sales_cart']:
             total_bill = 0
-            # THÊM TÍNH NĂNG 2: XÓA TỪNG MÓN TRONG GIỎ
-            for idx in range(len(st.session_state['sales_cart']) - 1, -1, -1):  # Duyệt ngược để xóa an toàn
+            for idx in range(len(st.session_state['sales_cart']) - 1, -1, -1):
                 item = st.session_state['sales_cart'][idx]
                 with st.container(border=True):
                     col_name, col_qty, col_price, col_total, col_del = st.columns([3, 1, 2, 2, 1])
@@ -193,7 +193,7 @@ def render_sales(df_inv):
                     col_price.write(f"Giá: {format_currency(item['GiaBan'])}")
                     item_total = item['SoLuongBan'] * item['GiaBan']
                     col_total.write(f"**{format_currency(item_total)}**")
-                    if col_del.button("🗑", key=f"del_{idx}"):
+                    if col_del.button("🗑", key=f"del_cart_{idx}"):
                         st.session_state['sales_cart'].pop(idx)
                         st.rerun()
                 total_bill += item_total
@@ -213,18 +213,21 @@ def render_sales(df_inv):
         else:
             st.caption("Chưa có hàng trong giỏ.")
 
-# --- CÁC PHẦN CÒN LẠI GIỮ NGUYÊN (NHẬP HÀNG, BÁO CÁO VỚI LỊCH SỬ ĐƠN) ---
-# (Tôi giữ nguyên phần render_import và render_reports như lần trước để code đầy đủ, không thiếu)
-
-# ... (dán phần render_import và render_reports từ code lần trước ở đây, bao gồm lịch sử đơn hàng chi tiết)
-
-# --- MAIN APP ---
-# (giữ nguyên)
-
-# --- 3. MAN HINH NHAP HANG ---
-def render_import(df_inv):
-    st.subheader("📦 Nhập hàng")
-    tab1, tab2 = st.tabs(["Nhập thêm hàng cũ", "Thêm sản phẩm mới hoàn toàn"])
+# --- 3. MAN HINH BAO CAO (THÊM LỊCH SỬ ĐƠN HÀNG CHI TIẾT THEO NGÀY) ---
+def render_reports(df_inv):
+    st.subheader("📊 Báo Cáo Hệ Thống")
+    
+    df_sales = dm.load_sales_history()
+    
+    if not df_sales.empty:
+        total_revenue = df_sales['ThanhTien'].sum()
+        total_profit = df_sales['LoiNhuan'].sum()
+        c1, c2 = st.columns(2)
+        c1.metric("Tổng doanh thu toàn thời gian", format_currency(total_revenue))
+        c2.metric("Tổng lợi nhuận gộp toàn thời gian", format_currency(total_profit))
+    st.divider()
+    
+    t1, t2, t3 = st.tabs(["Tồn Kho & Giá Vốn", "Lợi Nhuận & Hoàn Trả", "Phân Tích Năm"])
     
     with tab1:
         if not df_inv.empty:
@@ -277,7 +280,7 @@ def render_import(df_inv):
                 st.success("Đã nhập tồn kho thành công!")
                 st.rerun()
 
-# --- 4. MAN HINH BAO CAO (THÊM LỊCH SỬ ĐƠN HÀNG CHI TIẾT THEO NGÀY) ---
+# --- 4. MAN HINH BAO CAO (FIX DUPLICATE ID + LỊCH SỬ CHI TIẾT VỚI NÚT HOÀN TRẢ) ---
 def render_reports(df_inv):
     st.subheader("📊 Báo Cáo Hệ Thống")
     
@@ -294,7 +297,7 @@ def render_reports(df_inv):
     t1, t2, t3 = st.tabs(["Tồn Kho & Giá Vốn", "Lợi Nhuận & Hoàn Trả", "Phân Tích Năm"])
     
     with t1:
-        if not df_inv.empty:
+            if not df_inv.empty:
             df_inv['GiaTriTon'] = df_inv['SoLuong'] * df_inv['GiaNhap']
             st.metric("Tổng vốn tồn kho", format_currency(df_inv['GiaTriTon'].sum()))
             st.dataframe(df_inv, use_container_width=True)
@@ -306,11 +309,11 @@ def render_reports(df_inv):
             else:
                 st.success("Tất cả sản phẩm đều đủ tồn kho!")
         else: 
-            st.info("Chưa có dữ liệu kho.")
+            st.info("Chưa có dữ liệu kho.")# (giữ nguyên code tồn kho)
 
     with t2:
-        # Metric hôm nay
-       if not df_sales.empty and 'NgayBan' in df_sales.columns:
+        # Metric hôm nay (GIỮ NGUYÊN)
+        if not df_sales.empty and 'NgayBan' in df_sales.columns:
             df_sales['NgayBan'] = pd.to_datetime(df_sales['NgayBan'], errors='coerce')
             today_str = datetime.now().strftime('%Y-%m-%d')
             df_today_sales = df_sales[(df_sales['NgayBan'].dt.strftime('%Y-%m-%d') == today_str) & (df_sales['SoLuong'] > 0)]
@@ -324,10 +327,10 @@ def render_reports(df_inv):
             col2.metric("Lợi nhuận hôm nay", format_currency(today_profit))
             col3.metric("Số đơn hàng hôm nay", today_orders)
             st.divider()
-    
-        # LỊCH SỬ CHI TIẾT ĐƠN HÀNG VỚI NÚT HOÀN TRẢ TỪNG MÓN
+
+        # LỊCH SỬ CHI TIẾT ĐƠN HÀNG VỚI NÚT HOÀN TRẢ TỪNG MÓN (FIX DUPLICATE ID BẰNG KEY)
         st.write("### 📋 Lịch sử chi tiết đơn hàng (có thể hoàn trả từng món)")
-        selected_date = st.date_input("Chọn ngày xem đơn hàng", value=date.today())
+        selected_date = st.date_input("Chọn ngày xem đơn hàng", value=date.today(), key="order_history_date_input")  # THÊM KEY ĐỂ FIX DUPLICATE ID
         
         if not df_sales.empty and 'NgayBan' in df_sales.columns:
             df_sales['date'] = df_sales['NgayBan'].dt.date
@@ -353,7 +356,7 @@ def render_reports(df_inv):
                                     c2.write(f"{int(row['SoLuong'])} {row['DonVi']}")
                                     c3.write(f"Giá: {format_currency(row['GiaBan'])}")
                                     c4.write(f"Thành tiền: {format_currency(row['ThanhTien'])}")
-                                    if c5.button("Hoàn trả", key=f"ret_{idx}_{order_id}"):
+                                    if c5.button("Hoàn trả", key=f"ret_detail_{order_id}_{idx}"):  # Key duy nhất hơn
                                         if dm.process_return(row['MaDonHang'], row['MaSanPham'], row['SoLuong']):
                                             st.success(f"Đã hoàn trả {row['TenSanPham']} thành công!")
                                             st.rerun()
@@ -363,7 +366,8 @@ def render_reports(df_inv):
             st.info("Chưa có dữ liệu bán hàng.")
         
         st.divider()
-        # THÊM TÍNH NĂNG MỚI: LỊCH SỬ ĐƠN HÀNG CHI TIẾT THEO NGÀY
+        
+    # THÊM TÍNH NĂNG MỚI: LỊCH SỬ ĐƠN HÀNG CHI TIẾT THEO NGÀY
         st.write("### 📋 Lịch sử chi tiết đơn hàng")
         selected_date = st.date_input("Chọn ngày xem đơn hàng", value=date.today())
         
@@ -484,7 +488,7 @@ def render_reports(df_inv):
             st.info("Tháng này chưa có dữ liệu bán hàng.")
 
     with t3:
-        st.write("### 🗓️ Phân tích hiệu quả theo năm")
+       st.write("### 🗓️ Phân tích hiệu quả theo năm")
         if not df_sales.empty:
             df_sales['Nam'] = df_sales['NgayBan'].dt.year
             df_sales['Thang'] = df_sales['NgayBan'].dt.month
