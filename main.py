@@ -310,77 +310,80 @@ def render_reports(df_inv):
             top10_all = top10_all.sort_values('SoLuong', ascending=False).head(10)
             st.dataframe(top10_all, use_container_width=True)
         
-        # FIX DỨT ĐIỂM BIỂU ĐỒ THÁNG
-       # --- CHỈ CẦN THAY THẾ PHẦN BIỂU ĐỒ THÁNG TRONG HÀM render_reports (phần còn lại giữ nguyên) ---
-
-# FIX DỨT ĐIỂM: ẨN HOÀN TOÀN PHẦN ÂM CỦA TRỤC Y (TUNG) VÀ ĐẢM BẢO TRỤC X (HOÀNH) KHÔNG CÓ ÂM
-st.write("### 📈 Doanh thu & Lợi nhuận tháng này")
-if not df_month.empty:
-    current_year = datetime.now().year
-    current_month = datetime.now().month
-    last_day = datetime.now().day
-    
-    # Tạo full ngày 1 -> hôm nay
-    days_in_month = pd.date_range(
-        start=f"{current_year}-{current_month:02d}-01",
-        end=datetime.now().strftime('%Y-%m-%d'),
-        freq='D'
-    )
-    daily_full = pd.DataFrame({'day': days_in_month.dt.day})
-
-    # Group data
-    daily = df_month.groupby(df_month['NgayBan'].dt.day)[['ThanhTien', 'LoiNhuan']].sum().reset_index()
-    daily.rename(columns={'NgayBan': 'day'}, inplace=True)
-
-    # Merge + fill 0 + ép int
-    daily = daily_full.merge(daily, on='day', how='left').fillna(0)
-    daily['day'] = daily['day'].astype(int)
-    daily['ThanhTien'] = daily['ThanhTien'].clip(lower=0)
-    daily['LoiNhuan'] = daily['LoiNhuan'].clip(lower=0)
-
-    # Tính max để force trục y bắt đầu chính xác từ 0 và không padding xuống âm
-    max_y = max(daily['ThanhTien'].max(), daily['LoiNhuan'].max())
-    if max_y == 0:
-        max_y = 100000  # tránh lỗi nếu chưa có doanh thu
-    max_y *= 1.15  # padding nhẹ phía trên
-
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=daily['day'],
-        y=daily['ThanhTien'],
-        name="Doanh Thu",
-        marker_color='#0068C9'
-    ))
-    fig.add_trace(go.Scatter(
-        x=daily['day'],
-        y=daily['LoiNhuan'],
-        name="Lợi Nhuận",
-        mode='lines+markers',
-        line=dict(color='red', width=3),
-        marker=dict(size=8)
-    ))
-
-    fig.update_layout(
-        title=f"Doanh thu & Lợi nhuận tháng {current_month}/{current_year}",
-        xaxis_title="Ngày",
-        yaxis_title="Số tiền (đ)",
-        xaxis=dict(
-            type='category', 
-            tickmode='linear',
-            range=[0.5, last_day + 0.5],  # force trục x chỉ từ ngày 1 đến hôm nay, không có phần âm/trái thừa
-            showgrid=False  # tuỳ chọn: ẩn grid ngang nếu muốn sạch hơn
-        ),
-        yaxis=dict(
-            range=[0, max_y],       # BẮT BUỘC từ 0 trở lên, không padding xuống âm
-            fixedrange=True,        # không cho zoom xuống âm
-            zeroline=False,         # ẩn đường zero line nếu không cần
-            showgrid=True
-        ),
-        bargap=0.2
-    )
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("Tháng này chưa có dữ liệu bán hàng.")
+        # FIX DỨT ĐIỂM: ẨN HOÀN TOÀN PHẦN ÂM CỦA CẢ 2 TRỤC
+        st.write("### 📈 Doanh thu & Lợi nhuận tháng này")
+        if not df_month.empty:
+            current_year = datetime.now().year
+            current_month = datetime.now().month
+            last_day = datetime.now().day  # Ngày hiện tại trong tháng
+        
+            if last_day < 1:  # An toàn, dù không bao giờ xảy ra
+                last_day = 1
+        
+            # Tạo full ngày từ 1 đến hôm nay
+            days_in_month = pd.date_range(
+                start=f"{current_year}-{current_month:02d}-01",
+                end=f"{current_year}-{current_month:02d}-{last_day:02d}",
+                freq='D'
+            )
+            daily_full = pd.DataFrame({'day': days_in_month.dt.day})
+        
+            # Group dữ liệu thực
+            daily = df_month.groupby(df_month['NgayBan'].dt.day)[['ThanhTien', 'LoiNhuan']].sum().reset_index()
+            daily.rename(columns={'NgayBan': 'day'}, inplace=True)
+        
+            # Merge để đầy đủ ngày + fill 0 + ép int sạch
+            daily = daily_full.merge(daily, on='day', how='left').fillna(0)
+            daily['day'] = daily['day'].astype(int)
+            daily['ThanhTien'] = daily['ThanhTien'].clip(lower=0)
+            daily['LoiNhuan'] = daily['LoiNhuan'].clip(lower=0)
+        
+            # Tính max_y để padding nhẹ phía trên, force từ 0
+            max_y_value = max(daily['ThanhTien'].max(), daily['LoiNhuan'].max())
+            if max_y_value == 0:
+                max_y_value = 100000  # Nếu chưa bán, hiển thị trục nhỏ
+            max_y = max_y_value * 1.15  # Padding 15% phía trên
+        
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=daily['day'],
+                y=daily['ThanhTien'],
+                name="Doanh Thu",
+                marker_color='#0068C9',
+                width=0.8  # Bar rộng vừa phải
+            ))
+            fig.add_trace(go.Scatter(
+                x=daily['day'],
+                y=daily['LoiNhuan'],
+                name="Lợi Nhuận",
+                mode='lines+markers',
+                line=dict(color='red', width=3),
+                marker=dict(size=8)
+            ))
+        
+            fig.update_layout(
+                title=f"Doanh thu & Lợi nhuận tháng {current_month}/{current_year}",
+                xaxis_title="Ngày",
+                yaxis_title="Số tiền (đ)",
+                xaxis=dict(
+                    type='category',
+                    tickmode='linear',
+                    range=[0.5, last_day + 0.5],   # Force chỉ hiển thị từ ngày 1 đến hôm nay, không khoảng thừa trái/phải
+                    constrain='domain',            # Không cho zoom ra ngoài range
+                    showgrid=False
+                ),
+                yaxis=dict(
+                    range=[0, max_y],              # BẮT BUỘC từ 0 chính xác, không phần âm nào
+                    fixedrange=True,               # Không cho zoom xuống dưới 0
+                    zeroline=False,                # Ẩn đường zero nếu không muốn
+                    showgrid=True
+                ),
+                bargap=0.15,                       # Khoảng cách giữa các bar vừa phải
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Tháng này chưa có dữ liệu bán hàng.")
 
     with t3:
         st.write("### 🗓️ Phân tích hiệu quả theo năm")
