@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 from datetime import datetime, date
 import os
 import data_manager as dm
+import pytz  # Để set timezone VN
 
 # --- 1. CAU HINH GIAO DIEN ---
 st.set_page_config(
@@ -41,7 +42,8 @@ if 'import_cart' not in st.session_state:
 
 # --- HAM HO TRO ---
 def format_currency(amount):
-    return f"{amount:,.0f} đ"
+    # VN style: dot nghìn, no decimal
+    return f"{amount:,.0f} đ".replace(',', '.')
 
 # --- RENDER HEADER ---
 def render_header():
@@ -297,9 +299,10 @@ def render_reports(df_inv):
             st.info("Chưa có dữ liệu kho.")
 
     with t2:
+        tz = pytz.timezone('Asia/Ho_Chi_Minh')  # VN time
         if not df_sales.empty and 'NgayBan' in df_sales.columns:
             df_sales['NgayBan'] = pd.to_datetime(df_sales['NgayBan'], errors='coerce')
-            today_str = datetime.now().strftime('%Y-%m-%d')
+            today_str = datetime.now(tz).strftime('%Y-%m-%d')
             df_today_sales = df_sales[(df_sales['NgayBan'].dt.strftime('%Y-%m-%d') == today_str) & (df_sales['SoLuong'] > 0)]
             
             today_revenue = df_today_sales['ThanhTien'].sum()
@@ -313,7 +316,7 @@ def render_reports(df_inv):
             st.divider()
 
         st.write("### 📋 Lịch sử chi tiết đơn hàng (có thể hoàn trả từng món)")
-        selected_date = st.date_input("Chọn ngày xem đơn hàng", value=date.today(), key="order_history_date_input")
+        selected_date = st.date_input("Chọn ngày xem đơn hàng", value=datetime.now(tz).date(), key="order_history_date_input")
         
         if not df_sales.empty and 'NgayBan' in df_sales.columns:
             df_sales['date'] = df_sales['NgayBan'].dt.date
@@ -350,7 +353,7 @@ def render_reports(df_inv):
         
         st.divider()
         
-        df_month = df_sales[df_sales['NgayBan'].dt.month == datetime.now().month].copy() if not df_sales.empty and 'NgayBan' in df_sales.columns else pd.DataFrame()
+        df_month = df_sales[df_sales['NgayBan'].dt.month == datetime.now(tz).month].copy() if not df_sales.empty and 'NgayBan' in df_sales.columns else pd.DataFrame()
         if not df_month.empty:
             st.write("### 🔥 Top 10 sản phẩm bán chạy tháng này")
             top10 = df_month[df_month['SoLuong'] > 0].groupby(['MaSanPham', 'TenSanPham'])['SoLuong'].sum().reset_index()
@@ -376,9 +379,9 @@ def render_reports(df_inv):
         
         st.write("### 📈 Doanh thu & Lợi nhuận tháng này")
         if not df_month.empty:
-            current_month = datetime.now().month
-            current_year = datetime.now().year
-            last_day = datetime.now().day
+            current_month = datetime.now(tz).month
+            current_year = datetime.now(tz).year
+            last_day = datetime.now(tz).day
 
             daily_full = pd.DataFrame({'day': list(range(1, last_day + 1))})
 
@@ -441,7 +444,7 @@ def render_reports(df_inv):
         if not df_sales.empty:
             df_sales['Nam'] = df_sales['NgayBan'].dt.year
             df_sales['Thang'] = df_sales['NgayBan'].dt.month
-            current_year = datetime.now().year
+            current_year = datetime.now(tz).year
             df_year = df_sales[df_sales['Nam'] == current_year].copy()
             
             if not df_year.empty:
