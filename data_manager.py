@@ -24,7 +24,6 @@ def clean_to_float(s):
     elif ',' in s:  # Chỉ ,: coi là nghìn (US)
         s = s.replace(',', '')
     elif '.' in s:  # Chỉ .: coi là nghìn (VN) nếu no decimal, nhưng giữ nếu decimal
-        # Giả định nếu chỉ . và no sau, loại; nhưng để safe, dùng pd.to_numeric sau
         pass
     try:
         return float(s)
@@ -53,7 +52,6 @@ def get_connection():
 # --- HAM HELPER: DOC DU LIEU AN TOAN ---
 def safe_get_data(worksheet):
     try:
-        # Giữ formatted để date là string; nếu cần unformatted: import gspread.utils.ValueRenderOption, rồi data = worksheet.get_all_values(value_render_option=ValueRenderOption.unformatted)
         data = worksheet.get_all_values()
         if not data: return pd.DataFrame()
         
@@ -225,8 +223,8 @@ def process_import(import_list):
         for item in import_list:
             ma_sp = str(item['MaSanPham'])
             qty_in = item['SoLuong']
-            price_in = item['GiaNhap']
-            price_out = item['GiaBan']
+            price_in = clean_to_float(item['GiaNhap'])  # Clean vì giờ string từ text_input
+            price_out = clean_to_float(item['GiaBan'])  # Clean vì giờ string từ text_input
             
             exists = False
             row_idx_update = -1
@@ -278,8 +276,8 @@ def process_return(order_id, product_id, qty_return):
         if not original_row:
             return False
 
-        gia_ban = float(original_row[6] or 0)
-        gia_von = float(original_row[8] or 0)
+        gia_ban = clean_to_float(original_row[6] or '0')  # Sửa dùng clean_to_float
+        gia_von = clean_to_float(original_row[8] or '0')  # Sửa dùng clean_to_float
         tz = pytz.timezone('Asia/Ho_Chi_Minh')  # VN time
         timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
         return_order_id = order_id + "_RET"
