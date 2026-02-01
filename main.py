@@ -73,7 +73,7 @@ def render_login():
                 else:
                     st.error("Sai mật khẩu!")
 
-# --- 2. MAN HINH BAN HANG (NÂNG CẤP UX NHẬP NHANH - HIỆN NGAY KHI NHẬP SL > TỒN) ---
+# --- 2. MAN HINH BAN HANG (THÊM SỬA GIÁ TẠM + XÓA TỪNG MÓN TRONG GIỎ) ---
 def render_sales(df_inv):
     st.subheader("🛒 Bán Hàng Tại Quầy")
     col_search, col_cart = st.columns([5, 5], gap="large")
@@ -116,15 +116,18 @@ def render_sales(df_inv):
                             st.error(f"🚨 Hết hàng: Tồn kho = 0!")
                         
                         st.divider()
-                        c_price, c_qty = st.columns([1, 1])
-                        c_price.metric("Giá bán", format_currency(selected_item['GiaBan']))
-                        qty_sell = c_qty.number_input("Số lượng mua:", min_value=1, value=1, step=1, key=f"qty_sell_{selected_item['MaSanPham']}")
+                        
+                        # THÊM TÍNH NĂNG 1: SỬA GIÁ BÁN TẠM THỜI (CHỈ CHO ĐƠN NÀY)
+                        col_price_temp, col_qty = st.columns([1, 1])
+                        default_price = float(selected_item['GiaBan'])
+                        temp_price = col_price_temp.number_input("Giá bán tạm thời (đ)", min_value=0.0, value=default_price, step=1000.0, key=f"temp_price_{selected_item['MaSanPham']}")
+                        qty_sell = col_qty.number_input("Số lượng mua:", min_value=1, value=1, step=1, key=f"qty_sell_{selected_item['MaSanPham']}")
 
-                        # HIỆN FORM NHẬP NHANH NGAY KHI NHẬP SL > TỒN (REALTIME UX)
+                        # HIỆN FORM NHẬP NHANH KHI SL > TỒN
                         if qty_sell > selected_item['SoLuong']:
                             st.error(f"Không đủ tồn kho! Cần thêm ít nhất {qty_sell - selected_item['SoLuong']} {selected_item['DonVi']}.")
                             
-                            st.markdown("#### 📦 Nhập nhanh bổ sung tồn kho ngay tại đây (giỏ hàng không mất)")
+                            st.markdown("#### 📦 Nhập nhanh bổ sung tồn kho ngay tại đây")
                             with st.form(key=f"quick_import_realtime_{selected_item['MaSanPham']}"):
                                 col_q, col_gn, col_gb = st.columns(3)
                                 suggested_qty = max(10, qty_sell - selected_item['SoLuong'])
@@ -149,28 +152,28 @@ def render_sales(df_inv):
                                             "MaSanPham": selected_item['MaSanPham'],
                                             "TenSanPham": selected_item['TenSanPham'],
                                             "DonVi": selected_item['DonVi'],
-                                            "GiaBan": quick_gb,
+                                            "GiaBan": temp_price,  # Dùng giá tạm
                                             "SoLuongBan": qty_sell,
-                                            "ThanhTien": qty_sell * quick_gb
+                                            "ThanhTien": qty_sell * temp_price
                                         })
                                         st.toast("Đã thêm vào giỏ thành công!")
                                         st.rerun()
 
-                        # NÚT THÊM VÀO GIỎ BÌNH THƯỜNG (CHỈ HOẠT ĐỘNG KHI ĐỦ TỒN)
+                        # NÚT THÊM VÀO GIỎ (DÙNG GIÁ TẠM)
                         if st.button("➕ Thêm vào giỏ", type="primary", key=f"add_normal_{selected_item['MaSanPham']}"):
                             if qty_sell <= selected_item['SoLuong']:
                                 st.session_state['sales_cart'].append({
                                     "MaSanPham": selected_item['MaSanPham'],
                                     "TenSanPham": selected_item['TenSanPham'],
                                     "DonVi": selected_item['DonVi'],
-                                    "GiaBan": float(selected_item['GiaBan']),
+                                    "GiaBan": temp_price,  # Giá tạm thời
                                     "SoLuongBan": qty_sell,
-                                    "ThanhTien": qty_sell * selected_item['GiaBan']
+                                    "ThanhTien": qty_sell * temp_price
                                 })
-                                st.toast(f"Đã thêm {selected_item['TenSanPham']} vào giỏ!")
+                                st.toast(f"Đã thêm {selected_item['TenSanPham']} vào giỏ với giá {format_currency(temp_price)}!")
                                 st.rerun()
                             else:
-                                st.error("Vui lòng nhập nhanh bổ sung tồn kho bên trên trước khi thêm!")
+                                st.error("Vui lòng nhập nhanh bổ sung tồn kho bên trên trước!")
             else:
                 st.warning("Không tìm thấy sản phẩm nào.")
         else:
@@ -179,14 +182,26 @@ def render_sales(df_inv):
     with col_cart:
         st.info("Giỏ hàng hiện tại")
         if st.session_state['sales_cart']:
-            df_cart = pd.DataFrame(st.session_state['sales_cart'])
-            st.dataframe(df_cart[['TenSanPham', 'SoLuongBan', 'ThanhTien']], use_container_width=True, hide_index=True)
+            total_bill = 0
+            # THÊM TÍNH NĂNG 2: XÓA TỪNG MÓN TRONG GIỎ
+            for idx in range(len(st.session_state['sales_cart']) - 1, -1, -1):  # Duyệt ngược để xóa an toàn
+                item = st.session_state['sales_cart'][idx]
+                with st.container(border=True):
+                    col_name, col_qty, col_price, col_total, col_del = st.columns([3, 1, 2, 2, 1])
+                    col_name.write(f"**{item['TenSanPham']}** ({item['MaSanPham']})")
+                    col_qty.write(f"{item['SoLuongBan']} {item['DonVi']}")
+                    col_price.write(f"Giá: {format_currency(item['GiaBan'])}")
+                    item_total = item['SoLuongBan'] * item['GiaBan']
+                    col_total.write(f"**{format_currency(item_total)}**")
+                    if col_del.button("🗑", key=f"del_{idx}"):
+                        st.session_state['sales_cart'].pop(idx)
+                        st.rerun()
+                total_bill += item_total
             
-            total_bill = df_cart['ThanhTien'].sum()
-            st.markdown(f"<h3 style='text-align: right; color: red;'>Tổng: {format_currency(total_bill)}</h3>", unsafe_allow_html=True)
+            st.markdown(f"<h3 style='text-align: right; color: red;'>Tổng cộng: {format_currency(total_bill)}</h3>", unsafe_allow_html=True)
             
             c1, c2 = st.columns(2)
-            if c1.button("🗑 Xóa giỏ"):
+            if c1.button("🗑 Xóa toàn bộ giỏ"):
                 st.session_state['sales_cart'] = []
                 st.rerun()
             if c2.button("✅ THANH TOÁN", type="primary"):
