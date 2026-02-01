@@ -324,7 +324,45 @@ def render_reports(df_inv):
             col2.metric("Lợi nhuận hôm nay", format_currency(today_profit))
             col3.metric("Số đơn hàng hôm nay", today_orders)
             st.divider()
-
+        # LỊCH SỬ CHI TIẾT ĐƠN HÀNG (CÓ NÚT HOÀN TRẢ TỪNG MÓN)
+        st.write("### 📋 Lịch sử chi tiết đơn hàng (có thể hoàn trả từng món)")
+        selected_date = st.date_input("Chọn ngày xem đơn hàng", value=date.today())
+        
+        if not df_sales.empty and 'NgayBan' in df_sales.columns:
+            df_sales['date'] = df_sales['NgayBan'].dt.date
+            df_selected_day = df_sales[df_sales['date'] == selected_date].copy()
+            
+            if not df_selected_day.empty:
+                day_revenue = df_selected_day[df_selected_day['SoLuong'] > 0]['ThanhTien'].sum()
+                st.info(f"**Tổng doanh thu ngày {selected_date.strftime('%d/%m/%Y')}: {format_currency(day_revenue)}**")
+                
+                orders = df_selected_day.groupby('MaDonHang')
+                
+                for order_id, order_df in orders:
+                    order_time = order_df['NgayBan'].min().strftime('%H:%M')
+                    order_total = order_df[order_df['SoLuong'] > 0]['ThanhTien'].sum()
+                    num_items = len(order_df[order_df['SoLuong'] > 0])
+                    
+                    with st.expander(f"🧾 Đơn {order_id} | {order_time} | {num_items} sản phẩm | Tổng: {format_currency(order_total)}"):
+                        # Loop từng món để có nút hoàn trả
+                        for idx, row in order_df.iterrows():
+                            if row['SoLuong'] > 0:  # Chỉ hiện món bán
+                                with st.container(border=True):
+                                    c1, c2, c3, c4, c5 = st.columns([3, 1, 2, 2, 1])
+                                    c1.write(f"**{row['TenSanPham']}** ({row['MaSanPham']})")
+                                    c2.write(f"{int(row['SoLuong'])} {row['DonVi']}")
+                                    c3.write(f"Giá: {format_currency(row['GiaBan'])}")
+                                    c4.write(f"Thành tiền: {format_currency(row['ThanhTien'])}")
+                                    if c5.button("Hoàn trả", key=f"ret_detail_{idx}_{order_id}"):
+                                        if dm.process_return(row['MaDonHang'], row['MaSanPham'], row['SoLuong']):
+                                            st.success(f"Đã hoàn trả {row['TenSanPham']} thành công!")
+                                            st.rerun()
+            else:
+                st.info(f"Ngày {selected_date.strftime('%d/%m/%Y')} chưa có đơn hàng nào.")
+        else:
+            st.info("Chưa có dữ liệu bán hàng.")
+        
+        st.divider()
         # THÊM TÍNH NĂNG MỚI: LỊCH SỬ ĐƠN HÀNG CHI TIẾT THEO NGÀY
         st.write("### 📋 Lịch sử chi tiết đơn hàng")
         selected_date = st.date_input("Chọn ngày xem đơn hàng", value=date.today())
