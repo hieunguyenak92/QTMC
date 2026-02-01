@@ -69,7 +69,9 @@ def load_inventory():
             numeric_cols = ['SoLuong', 'GiaNhap', 'GiaBan']
             for col in numeric_cols:
                 if col in df.columns:
-                    df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+                    # Cải thiện clean: replace cả , và . nghìn, giữ thập phân nếu có
+                    df[col] = df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True)
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             return df
         except:
             return pd.DataFrame()
@@ -109,7 +111,8 @@ def load_sales_history():
                 
             numeric_cols = ['SoLuong', 'GiaBan', 'ThanhTien', 'GiaVonLucBan', 'LoiNhuan']
             for col in numeric_cols:
-                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+                df[col] = df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True)
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             
             return df
         except Exception as e:
@@ -117,7 +120,7 @@ def load_sales_history():
             return pd.DataFrame()
     return pd.DataFrame()
 
-# --- 3. XU LY BAN HANG ---
+# --- 3. XU LY BAN HANG (FIX CLEAN PRICE KHI THANH TOÁN) ---
 def process_checkout(cart_items):
     sh = get_connection()
     if not sh: return False
@@ -136,18 +139,22 @@ def process_checkout(cart_items):
             ma_sp = str(item['MaSanPham'])
             qty_sell = item['SoLuongBan']
             
+            # CLEAN GIÁ BÁN TỪ GIỎ (AN TOÀN NẾU CÓ STRING)
+            gia_ban = float(str(item['GiaBan']).replace(',', '').strip())
+            
             match_idx = df_inv.index[df_inv['MaSanPham'] == ma_sp].tolist()
             
             if match_idx:
                 idx = match_idx[0]
                 current_qty = float(df_inv.at[idx, 'SoLuong'])
-                cost_price = float(df_inv.at[idx, 'GiaNhap'])
+                # CLEAN GIÁ VỐN
+                cost_price = float(str(df_inv.at[idx, 'GiaNhap']).replace(',', '').strip())
                 
                 new_qty = current_qty - qty_sell
                 ws_inventory.update_cell(idx + 2, 4, new_qty)
                 
-                revenue = item['GiaBan'] * qty_sell
-                profit = (item['GiaBan'] - cost_price) * qty_sell
+                revenue = gia_ban * qty_sell
+                profit = (gia_ban - cost_price) * qty_sell
                 
                 sales_rows.append([
                     timestamp,
@@ -156,7 +163,7 @@ def process_checkout(cart_items):
                     item['TenSanPham'],
                     item['DonVi'],
                     qty_sell,
-                    item['GiaBan'],
+                    gia_ban,  # lưu float sạch
                     revenue,
                     cost_price,
                     profit
@@ -171,7 +178,6 @@ def process_checkout(cart_items):
         st.error(f"Lỗi: {str(e)}")
         return False
     return False
-
 # --- 4. XU LY NHAP HANG ---
 def process_import(import_list):
     sh = get_connection()
