@@ -4,6 +4,18 @@ from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 from datetime import datetime
 
+# CLEAN PRICE CHUẨN (HANDLE CẢ MỸ & VIỆT LOCALE)
+def clean_to_float(s):
+    if pd.isna(s):
+        return 0.0
+    s = str(s).strip().replace(' ', '')
+    s = s.replace('.', '')  # Remove dot nghìn (Việt)
+    s = s.replace(',', '.')  # Comma thập phân (Việt) → dot chuẩn Python
+    try:
+        return float(s)
+    except:
+        return 0.0
+
 # --- KET NOI GOOGLE SHEET ---
 def get_connection():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -57,7 +69,7 @@ def safe_get_data(worksheet):
         st.error(f"Lỗi đọc dữ liệu: {e}")
         return pd.DataFrame()
 
-# --- 1. TAI TON KHO ---
+# --- 1. TAI TON KHO (CLEAN PRICE KHI LOAD) ---
 @st.cache_data(ttl=60)
 def load_inventory():
     sh = get_connection()
@@ -69,15 +81,13 @@ def load_inventory():
             numeric_cols = ['SoLuong', 'GiaNhap', 'GiaBan']
             for col in numeric_cols:
                 if col in df.columns:
-                    # Cải thiện clean: replace cả , và . nghìn, giữ thập phân nếu có
-                    df[col] = df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True)
-                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                    df[col] = df[col].apply(clean_to_float)
             return df
         except:
             return pd.DataFrame()
     return pd.DataFrame()
 
-# --- 2. TAI LICH SU BAN ---
+# --- 2. TAI LICH SU BAN (CLEAN PRICE KHI LOAD) ---
 def load_sales_history():
     sh = get_connection()
     if sh:
@@ -111,8 +121,8 @@ def load_sales_history():
                 
             numeric_cols = ['SoLuong', 'GiaBan', 'ThanhTien', 'GiaVonLucBan', 'LoiNhuan']
             for col in numeric_cols:
-                df[col] = df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True)
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                if col in df.columns:
+                    df[col] = df[col].apply(clean_to_float)
             
             return df
         except Exception as e:
@@ -120,7 +130,7 @@ def load_sales_history():
             return pd.DataFrame()
     return pd.DataFrame()
 
-# --- 3. XU LY BAN HANG (FIX CLEAN PRICE KHI THANH TOÁN) ---
+# --- 3. XU LY BAN HANG (CLEAN PRICE KHI CHECKOUT) ---
 def process_checkout(cart_items):
     sh = get_connection()
     if not sh: return False
@@ -131,24 +141,27 @@ def process_checkout(cart_items):
         
         df_inv = safe_get_data(ws_inventory)
         
+        # Apply clean cho df_inv (an toàn thêm)
+        if 'GiaNhap' in df_inv.columns:
+            df_inv['GiaNhap'] = df_inv['GiaNhap'].apply(clean_to_float)
+        
         sales_rows = []
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         order_id = datetime.now().strftime("%Y%m%d%H%M%S")
         
         for item in cart_items:
             ma_sp = str(item['MaSanPham'])
-            qty_sell = item['SoLuongBan']
+            qty_sell = int(item['SoLuongBan'])  # SL luôn int
             
-            # CLEAN GIÁ BÁN TỪ GIỎ (AN TOÀN NẾU CÓ STRING)
-            gia_ban = float(str(item['GiaBan']).replace(',', '').strip())
+            # CLEAN GIÁ BÁN TỪ GIỎ (AN TOÀN DÙ STRING)
+            gia_ban = clean_to_float(item['GiaBan'])
             
             match_idx = df_inv.index[df_inv['MaSanPham'] == ma_sp].tolist()
             
             if match_idx:
                 idx = match_idx[0]
-                current_qty = float(df_inv.at[idx, 'SoLuong'])
-                # CLEAN GIÁ VỐN
-                cost_price = float(str(df_inv.at[idx, 'GiaNhap']).replace(',', '').strip())
+                current_qty = clean_to_float(df_inv.at[idx, 'SoLuong'])
+                cost_price = clean_to_float(df_inv.at[idx, 'GiaNhap'])
                 
                 new_qty = current_qty - qty_sell
                 ws_inventory.update_cell(idx + 2, 4, new_qty)
@@ -163,7 +176,7 @@ def process_checkout(cart_items):
                     item['TenSanPham'],
                     item['DonVi'],
                     qty_sell,
-                    gia_ban,  # lưu float sạch
+                    gia_ban,
                     revenue,
                     cost_price,
                     profit
