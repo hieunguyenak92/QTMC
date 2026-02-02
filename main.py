@@ -233,7 +233,7 @@ def render_sales(df_inv):
         st.info("Chưa có dữ liệu bán hàng.")
 # --- 3. MAN HINH NHAP HANG ---
 def render_import(df_inv):
-    st.subheader("📦 Nhập Kho")
+    st.subheader("📦 Nhập Tồn Kho")
     tab1, tab2 = st.tabs(["Nhập thêm hàng cũ", "Thêm sản phẩm mới hoàn toàn"])
     
     with tab1:
@@ -254,37 +254,55 @@ def render_import(df_inv):
                         })
                         st.rerun()
 
-    with tab2:
-        next_id = len(df_inv) + 1 if not df_inv.empty else 1
+with tab2:
+        # Tính mã sản phẩm mới: Lấy mã cuối cùng +1
+        if not df_inv.empty:
+            last_code = df_inv['MaSanPham'].max()
+            if last_code and last_code.startswith('SP'):
+                try:
+                    num_str = last_code[2:]  # '000463'
+                    new_num = int(num_str) + 1
+                    next_id = f"SP{new_num:06d}"  # 'SP000464'
+                except ValueError:
+                    next_id = "SP000001"  # Default nếu mã không parse được
+            else:
+                next_id = "SP000001"
+        else:
+            next_id = "SP000001"
+        
         with st.form("f_new"):
             st.info(f"Gợi ý Mã SP tiếp theo: {next_id}")
             c1, c2 = st.columns([1, 2])
-            m_id = c1.text_input("Mã SP (*)", value=str(next_id))
+            m_id = c1.text_input("Mã SP (*)", value=next_id)
             m_ten = c2.text_input("Tên SP (*)")
             c3, c4, c5 = st.columns(3)
             m_dv = c3.selectbox("Đơn vị", ["Viên", "Vỉ", "Hộp", "Lọ", "Tuýp"])
             m_ncc = c4.text_input("Nhà cung cấp")
-            m_sl = c5.number_input("SL ban đầu", 1, value=1)
+            m_sl = c5.number_input("SL ban đầu", min_value=1, value=1)
             c6, c7 = st.columns(2)
-            m_gn = c6.number_input("Giá Nhập", 0.0)
-            m_gb = c7.number_input("Giá Bán", 0.0)
+            m_gn_str = c6.text_input("Giá Nhập", value="0")
+            m_gb_str = c7.text_input("Giá Bán", value="0")
             if st.form_submit_button("Xác nhận SP mới"):
-                if m_ten:
+                m_gn = dm.clean_to_float(m_gn_str)
+                m_gb = dm.clean_to_float(m_gb_str)
+                if m_ten and m_gn > 0 and m_gb > 0:
                     st.session_state['import_cart'].append({
                         "MaSanPham": m_id, "TenSanPham": m_ten, "DonVi": m_dv,
                         "NhaCungCap": m_ncc, "SoLuong": m_sl, "GiaNhap": m_gn, "GiaBan": m_gb
                     })
                     st.rerun()
+                else:
+                    st.error("Thông tin không hợp lệ!")
 
     if st.session_state['import_cart']:
         st.divider()
-        st.write("### Danh sách chờ nhập kho")
+        st.write("### Danh sách chờ nhập tồn kho")
         df_imp = pd.DataFrame(st.session_state['import_cart'])
         st.table(df_imp)
         if st.button("💾 LƯU TẤT CẢ VÀO KHO", type="primary"):
             if dm.process_import(st.session_state['import_cart']):
                 st.session_state['import_cart'] = []
-                st.success("Đã nhập kho thành công!")
+                st.success("Đã nhập tồn kho thành công!")
                 st.rerun()
 
 # --- 4. MAN HINH BAO CAO ---
