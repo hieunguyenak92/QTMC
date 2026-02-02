@@ -121,8 +121,7 @@ def render_sales(df_inv):
                         
                         col_price_temp, col_qty = st.columns([1, 1])
                         default_price = float(selected_item['GiaBan'])
-                        temp_price_str = col_price_temp.text_input("Giá bán tạm thời (đ)", value=format_currency(default_price), key=f"temp_price_{selected_item['MaSanPham']}")
-                        temp_price = dm.clean_to_float(temp_price_str)
+                        temp_price = col_price_temp.number_input("Giá bán tạm thời (đ)", min_value=0.0, value=default_price, step=1000.0, key=f"temp_price_{selected_item['MaSanPham']}")
                         qty_sell = col_qty.number_input("Số lượng mua:", min_value=1, value=1, step=1, key=f"qty_sell_{selected_item['MaSanPham']}")
 
                         if qty_sell > selected_item['SoLuong']:
@@ -133,40 +132,35 @@ def render_sales(df_inv):
                                 col_q, col_gn, col_gb = st.columns(3)
                                 suggested_qty = max(10, qty_sell - selected_item['SoLuong'])
                                 quick_qty = col_q.number_input("Số lượng nhập thêm", min_value=1, value=suggested_qty)
-                                quick_gn_str = col_gn.text_input("Giá nhập mới", value=format_currency(float(selected_item['GiaNhap'])))
-                                quick_gb_str = col_gb.text_input("Giá bán mới (nếu thay đổi)", value=format_currency(float(selected_item['GiaBan'])))
+                                quick_gn = col_gn.number_input("Giá nhập mới", value=float(selected_item['GiaNhap']))
+                                quick_gb = col_gb.number_input("Giá bán mới (nếu thay đổi)", value=float(selected_item['GiaBan']))
                                 
                                 if st.form_submit_button("💾 Nhập nhanh & Thêm vào giỏ ngay", type="primary"):
-                                    quick_gn = dm.clean_to_float(quick_gn_str)
-                                    quick_gb = dm.clean_to_float(quick_gb_str)
-                                    if quick_gn > 0 and quick_gb > 0:  # Validate
-                                        temp_import = [{
+                                    temp_import = [{
+                                        "MaSanPham": selected_item['MaSanPham'],
+                                        "TenSanPham": selected_item['TenSanPham'],
+                                        "DonVi": selected_item['DonVi'],
+                                        "SoLuong": quick_qty,
+                                        "GiaNhap": quick_gn,
+                                        "GiaBan": quick_gb,
+                                        "NhaCungCap": ""
+                                    }]
+                                    
+                                    if dm.process_import(temp_import):
+                                        st.success(f"Đã nhập thêm {quick_qty} {selected_item['DonVi']} vào kho!")
+                                        st.session_state['sales_cart'].append({
                                             "MaSanPham": selected_item['MaSanPham'],
                                             "TenSanPham": selected_item['TenSanPham'],
                                             "DonVi": selected_item['DonVi'],
-                                            "SoLuong": quick_qty,
-                                            "GiaNhap": quick_gn,
-                                            "GiaBan": quick_gb,
-                                            "NhaCungCap": ""
-                                        }]
-                                        
-                                        if dm.process_import(temp_import):
-                                            st.success(f"Đã nhập thêm {quick_qty} {selected_item['DonVi']} vào kho!")
-                                            st.session_state['sales_cart'].append({
-                                                "MaSanPham": selected_item['MaSanPham'],
-                                                "TenSanPham": selected_item['TenSanPham'],
-                                                "DonVi": selected_item['DonVi'],
-                                                "GiaBan": temp_price,
-                                                "SoLuongBan": qty_sell,
-                                                "ThanhTien": qty_sell * temp_price
-                                            })
-                                            st.toast("Đã thêm vào giỏ thành công!")
-                                            st.rerun()
-                                    else:
-                                        st.error("Giá nhập/bán không hợp lệ!")
+                                            "GiaBan": temp_price,
+                                            "SoLuongBan": qty_sell,
+                                            "ThanhTien": qty_sell * temp_price
+                                        })
+                                        st.toast("Đã thêm vào giỏ thành công!")
+                                        st.rerun()
 
                         if st.button("➕ Thêm vào giỏ", type="primary", key=f"add_normal_{selected_item['MaSanPham']}"):
-                            if qty_sell <= selected_item['SoLuong'] and temp_price > 0:
+                            if qty_sell <= selected_item['SoLuong']:
                                 st.session_state['sales_cart'].append({
                                     "MaSanPham": selected_item['MaSanPham'],
                                     "TenSanPham": selected_item['TenSanPham'],
@@ -178,7 +172,7 @@ def render_sales(df_inv):
                                 st.toast(f"Đã thêm {selected_item['TenSanPham']} vào giỏ với giá {format_currency(temp_price)}!")
                                 st.rerun()
                             else:
-                                st.error("Vui lòng kiểm tra giá và tồn kho!")
+                                st.error("Vui lòng nhập nhanh bổ sung tồn kho bên trên trước!")
             else:
                 st.warning("Không tìm thấy sản phẩm nào.")
         else:
@@ -216,8 +210,7 @@ def render_sales(df_inv):
                     st.rerun()
         else:
             st.caption("Chưa có hàng trong giỏ.")
-
-    # Thêm bảng thống kê hàng đã bán trong ngày
+# Thêm bảng thống kê hàng đã bán trong ngày
     st.subheader("📋 Danh sách hàng đã bán hôm nay")
     df_sales = dm.load_sales_history()
     if not df_sales.empty and 'NgayBan' in df_sales.columns:
@@ -238,7 +231,6 @@ def render_sales(df_inv):
             st.info("Hôm nay chưa có hàng nào được bán.")
     else:
         st.info("Chưa có dữ liệu bán hàng.")
-
 # --- 3. MAN HINH NHAP HANG ---
 def render_import(df_inv):
     st.subheader("📦 Nhập Kho")
@@ -317,7 +309,6 @@ def render_import(df_inv):
                 st.session_state['import_cart'] = []
                 st.success("Đã nhập kho thành công!")
                 st.rerun()
-
 # --- 4. MAN HINH BAO CAO ---
 def render_reports(df_inv):
     st.subheader("📊 Báo Cáo Hệ Thống")
