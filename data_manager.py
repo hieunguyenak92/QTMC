@@ -266,20 +266,35 @@ def process_return(order_id, product_id, qty_return):
         ws_inventory = sh.worksheet("TonKho")
 
         records = ws_sales.get_all_values()
-        row_to_delete = None
+        original_row = None
         for i in range(1, len(records)):
             row = records[i]
             if len(row) >= 10 and str(row[1]).strip() == str(order_id) and str(row[2]).strip() == str(product_id):
-                row_to_delete = i + 1  # Row index in sheet (1-based)
+                original_row = row
                 break
 
-        if not row_to_delete:
+        if not original_row:
             return False
 
-        # Xóa dòng trong sheet LichSuBan
-        ws_sales.delete_rows(row_to_delete)
+        gia_ban = clean_to_float(original_row[6] or '0')  # Sửa dùng clean_to_float
+        gia_von = clean_to_float(original_row[8] or '0')  # Sửa dùng clean_to_float
+        tz = pytz.timezone('Asia/Ho_Chi_Minh')  # VN time
+        timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        return_order_id = order_id + "_RET"
 
-        # Cập nhật tồn kho
+        ws_sales.append_row([
+            timestamp,
+            return_order_id,
+            product_id,
+            original_row[3],
+            original_row[4],
+            -qty_return,
+            gia_ban,
+            -gia_ban * qty_return,
+            gia_von,
+            -(gia_ban - gia_von) * qty_return
+        ])
+
         df_inv = safe_get_data(ws_inventory)
         match_idx = df_inv.index[df_inv['MaSanPham'] == str(product_id)].tolist()
         if match_idx:
