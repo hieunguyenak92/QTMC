@@ -3,28 +3,34 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 from datetime import datetime
-import re  # Để clean symbol robust
-import pytz  # Để set timezone VN
+import re
+import pytz
 
-# CLEAN PRICE CHUẨN (HANDLE CẢ US & VN LOCALE + SYMBOL + DECIMAL/ÂM)
+# CLEAN PRICE CHUẨN (FIXED: handle VN "10.000" và US "10,000")
 def clean_to_float(s):
     if pd.isna(s):
         return 0.0
     s = str(s).strip().replace(' ', '')
     # Loại symbol (₫, đ, VND, $, etc.)
     s = re.sub(r'[^\d.,-]', '', s)
-    # Handle locale: Check vị trí , và . để quyết định separator
-    if ',' in s and '.' in s:
-        if s.rfind(',') > s.rfind('.'):  # VN: thập phân ,
-            s = s.replace('.', '')  # Loại nghìn .
-            s = s.replace(',', '.')  # Thập phân , -> .
-        else:  # US: thập phân .
-            s = s.replace(',', '')  # Loại nghìn ,
-            # Giữ . thập phân
-    elif ',' in s:  # Chỉ ,: coi là nghìn (US)
+
+    # === FIX MỚI: Xử lý VN nghìn (dấu . là nghìn) ===
+    if '.' in s and ',' not in s:
+        parts = s.split('.')
+        if len(parts) == 2 and len(parts[1]) == 3 and parts[1].isdigit():
+            s = parts[0] + parts[1]          # "10.000" → "10000"
+
+    # Handle US format "10,000"
+    if ',' in s and '.' not in s:
         s = s.replace(',', '')
-    elif '.' in s:  # Chỉ .: coi là nghìn (VN) nếu no decimal, nhưng giữ nếu decimal
-        pass
+
+    # Handle mixed "10,000.00" hoặc "10.000,00"
+    if ',' in s and '.' in s:
+        if s.rfind(',') > s.rfind('.'):      # VN: , là thập phân
+            s = s.replace('.', '').replace(',', '.')
+        else:                                # US: . là thập phân
+            s = s.replace(',', '')
+
     try:
         return float(s)
     except:
@@ -83,7 +89,7 @@ def safe_get_data(worksheet):
         st.error(f"Lỗi đọc dữ liệu: {e}")
         return pd.DataFrame()
 
-# --- 1. TAI TON KHO (CLEAN PRICE KHI LOAD) ---
+# --- 1. TAI TON KHO ---
 @st.cache_data(ttl=60)
 def load_inventory():
     sh = get_connection()
@@ -101,7 +107,7 @@ def load_inventory():
             return pd.DataFrame()
     return pd.DataFrame()
 
-# --- 2. TAI LICH SU BAN (CLEAN PRICE KHI LOAD) ---
+# --- 2. TAI LICH SU BAN ---
 def load_sales_history():
     sh = get_connection()
     if sh:
@@ -144,7 +150,7 @@ def load_sales_history():
             return pd.DataFrame()
     return pd.DataFrame()
 
-# --- 3. XU LY BAN HANG (CLEAN PRICE KHI CHECKOUT) ---
+# --- 3. XU LY BAN HANG ---
 def process_checkout(cart_items):
     sh = get_connection()
     if not sh: return False
@@ -155,20 +161,18 @@ def process_checkout(cart_items):
         
         df_inv = safe_get_data(ws_inventory)
         
-        # Apply clean cho df_inv (an toàn thêm)
         if 'GiaNhap' in df_inv.columns:
             df_inv['GiaNhap'] = df_inv['GiaNhap'].apply(clean_to_float)
         
         sales_rows = []
-        tz = pytz.timezone('Asia/Ho_Chi_Minh')  # VN time
+        tz = pytz.timezone('Asia/Ho_Chi_Minh')
         timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
         order_id = datetime.now(tz).strftime("%Y%m%d%H%M%S")
         
         for item in cart_items:
             ma_sp = str(item['MaSanPham'])
-            qty_sell = int(item['SoLuongBan'])  # SL luôn int
+            qty_sell = int(item['SoLuongBan'])
             
-            # CLEAN GIÁ BÁN TỪ GIỎ (AN TOÀN DÙ STRING)
             gia_ban = clean_to_float(item['GiaBan'])
             
             match_idx = df_inv.index[df_inv['MaSanPham'] == ma_sp].tolist()
@@ -206,6 +210,7 @@ def process_checkout(cart_items):
         st.error(f"Lỗi: {str(e)}")
         return False
     return False
+
 # --- 4. XU LY NHAP HANG ---
 def process_import(import_list):
     sh = get_connection()
@@ -216,15 +221,15 @@ def process_import(import_list):
         ws_import = sh.worksheet("LichSuNhap")
         df_inv = safe_get_data(ws_inventory)
         
-        tz = pytz.timezone('Asia/Ho_Chi_Minh')  # VN time
+        tz = pytz.timezone('Asia/Ho_Chi_Minh')
         timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
         import_log_rows = []
         
         for item in import_list:
             ma_sp = str(item['MaSanPham'])
             qty_in = item['SoLuong']
-            price_in = clean_to_float(item['GiaNhap'])  # Clean vì giờ string từ text_input
-            price_out = clean_to_float(item['GiaBan'])  # Clean vì giờ string từ text_input
+            price_in = clean_to_float(item['GiaNhap'])
+            price_out = clean_to_float(item['GiaBan'])
             
             exists = False
             row_idx_update = -1
@@ -256,7 +261,7 @@ def process_import(import_list):
         st.error(f"Lỗi nhập hàng: {str(e)}")
         return False
 
-# --- 5. XU LY HOAN TRA (CHUẨN: THÊM DÒNG ÂM) ---
+# --- 5. XU LY HOAN TRA ---
 def process_return(order_id, product_id, qty_return):
     sh = get_connection()
     if not sh: return False
@@ -270,16 +275,14 @@ def process_return(order_id, product_id, qty_return):
         for i in range(1, len(records)):
             row = records[i]
             if len(row) >= 10 and str(row[1]).strip() == str(order_id) and str(row[2]).strip() == str(product_id):
-                row_to_delete = i + 1  # Row index in sheet (1-based)
+                row_to_delete = i + 1
                 break
 
         if not row_to_delete:
             return False
 
-        # Xóa dòng trong sheet LichSuBan
         ws_sales.delete_rows(row_to_delete)
 
-        # Cập nhật tồn kho
         df_inv = safe_get_data(ws_inventory)
         match_idx = df_inv.index[df_inv['MaSanPham'] == str(product_id)].tolist()
         if match_idx:
