@@ -3,7 +3,8 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 from datetime import datetime
-import re  # Để clean symbol robust
+import re  # Để clean symbol robust / extract sheet key
+import time
 import pytz  # Để set timezone VN
 
 # NOTE: User request: do not use clean_to_float anymore.
@@ -14,6 +15,12 @@ def clean_to_float(value):
         return float(value)
     except Exception:
         return 0.0
+
+def _extract_sheet_key(sheet_url):
+    if not sheet_url:
+        return None
+    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", sheet_url)
+    return m.group(1) if m else None
 
 # --- KET NOI GOOGLE SHEET ---
 def get_connection():
@@ -29,7 +36,22 @@ def get_connection():
         sheet_url = st.secrets.get("sheet_url")
         if not sheet_url:
             return None
-        return client.open_by_url(sheet_url)
+
+        # Retry + fallback to open_by_key to avoid Drive API 500 errors
+        last_err = None
+        sheet_key = _extract_sheet_key(sheet_url)
+        for attempt in range(3):
+            try:
+                return client.open_by_url(sheet_url)
+            except Exception as e:
+                last_err = e
+                if sheet_key:
+                    try:
+                        return client.open_by_key(sheet_key)
+                    except Exception as e2:
+                        last_err = e2
+                time.sleep(0.7 * (attempt + 1))
+        raise last_err
     except Exception as e:
         st.error(f"Lỗi kết nối Database: {str(e)}")
         return None
