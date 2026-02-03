@@ -37,7 +37,15 @@ def get_connection():
 # --- HAM HELPER: DOC DU LIEU AN TOAN ---
 def safe_get_data(worksheet):
     try:
-        data = worksheet.get_all_values()
+        try:
+            # Lấy giá trị thô (không theo định dạng hiển thị) để tránh lỗi dấu phân cách
+            data = worksheet.get("A:Z", value_render_option='UNFORMATTED_VALUE')
+        except Exception:
+            try:
+                data = worksheet.get_all_values(value_render_option='UNFORMATTED_VALUE')
+            except Exception:
+                # Fallback nếu version gspread cũ
+                data = worksheet.get_all_values()
         if not data: return pd.DataFrame()
         
         headers = data[0]
@@ -93,7 +101,13 @@ def load_sales_history():
     if sh:
         try:
             wks = sh.worksheet("LichSuBan")
-            data = wks.get_all_values()
+            try:
+                data = wks.get("A:J", value_render_option='UNFORMATTED_VALUE')
+            except Exception:
+                try:
+                    data = wks.get_all_values(value_render_option='UNFORMATTED_VALUE')
+                except Exception:
+                    data = wks.get_all_values()
             
             COL_NAMES = [
                 'NgayBan', 'MaDonHang', 'MaSanPham', 'TenSanPham', 
@@ -140,7 +154,13 @@ def process_checkout(cart_items):
         ws_inventory = sh.worksheet("TonKho")
         ws_sales = sh.worksheet("LichSuBan")
         
-        df_inv = safe_get_data(ws_inventory)
+        # Dùng cùng nguồn với UI để đảm bảo số đã được parse ổn định
+        df_inv = load_inventory()
+        if df_inv.empty:
+            st.error("Không tải được dữ liệu tồn kho.")
+            return False
+        if 'MaSanPham' in df_inv.columns:
+            df_inv['MaSanPham'] = df_inv['MaSanPham'].astype(str).str.strip()
         
         # Không clean dữ liệu tồn kho theo yêu cầu
         
