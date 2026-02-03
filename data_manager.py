@@ -6,12 +6,12 @@ from datetime import datetime
 import re  # Để clean symbol robust
 import pytz  # Để set timezone VN
 
-# CLEAN PRICE CHUẨN (FIX DỨT ĐIỂM: remove all non-digit → handle VN/US format)
+# CLEAN PRICE CHUẨN (chỉ dùng cho đọc sheet string, không dùng cho float từ input)
 def clean_to_float(s):
     if pd.isna(s):
         return 0.0
     s = str(s).strip().replace(' ', '')
-    # Remove tất cả ký tự không phải số (., ,, đ, ₫, $, v.v.)
+    # Remove tất cả ký tự không phải số
     s = re.sub(r'\D', '', s)
     try:
         return float(s) if s else 0.0
@@ -132,7 +132,7 @@ def load_sales_history():
             return pd.DataFrame()
     return pd.DataFrame()
 
-# --- 3. XU LY BAN HANG (CLEAN PRICE KHI CHECKOUT) ---
+# --- 3. XU LY BAN HANG (FIX: không clean giá từ cart vì đã là float) ---
 def process_checkout(cart_items):
     sh = get_connection()
     if not sh: return False
@@ -156,8 +156,8 @@ def process_checkout(cart_items):
             ma_sp = str(item['MaSanPham'])
             qty_sell = int(item['SoLuongBan'])  # SL luôn int
             
-            # GiaBan đã là float từ cart, không cần clean lại
-            gia_ban = item['GiaBan']
+            # Giá từ cart là float từ number_input → dùng trực tiếp, không clean
+            gia_ban = float(item['GiaBan'])
             
             match_idx = df_inv.index[df_inv['MaSanPham'] == ma_sp].tolist()
             
@@ -195,7 +195,7 @@ def process_checkout(cart_items):
         return False
     return False
 
-# --- 4. XU LY NHAP HANG ---
+# --- 4. XU LY NHAP HANG (FIX: không clean giá từ list vì đã là float) ---
 def process_import(import_list):
     sh = get_connection()
     if not sh: return False
@@ -212,8 +212,8 @@ def process_import(import_list):
         for item in import_list:
             ma_sp = str(item['MaSanPham'])
             qty_in = item['SoLuong']
-            price_in = item['GiaNhap']  # Đã là float từ render_import
-            price_out = item['GiaBan']  # Đã là float từ render_import
+            price_in = float(item['GiaNhap'])  # Đã là float từ input
+            price_out = float(item['GiaBan'])  # Đã là float từ input
             
             exists = False
             row_idx_update = -1
@@ -245,7 +245,7 @@ def process_import(import_list):
         st.error(f"Lỗi nhập hàng: {str(e)}")
         return False
 
-# --- 5. XU LY HOAN TRA (CHUẨN: XÓA DÒNG TRONG SHEET) ---
+# --- 5. XU LY HOAN TRA (GIỮ NGUYÊN: XÓA DÒNG → KHÔNG CÒN _RET) ---
 def process_return(order_id, product_id, qty_return):
     sh = get_connection()
     if not sh: return False
