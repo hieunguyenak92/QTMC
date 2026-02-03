@@ -179,8 +179,9 @@ def process_checkout(cart_items):
                 idx = match_idx[0]
                 try:
                     current_qty = float(df_inv.at[idx, 'SoLuong'])
-                    # Lấy giá bán và giá nhập trực tiếp từ tồn kho theo yêu cầu
-                    gia_ban = float(df_inv.at[idx, 'GiaBan'])
+                    # Giá bán lấy từ giỏ hàng (giá cuối cùng khách mua)
+                    gia_ban = float(item['GiaBan'])
+                    # Giá vốn lấy từ tồn kho để tính lợi nhuận
                     cost_price = float(df_inv.at[idx, 'GiaNhap'])
                 except Exception:
                     st.error(f"Dữ liệu giá/SL của sản phẩm {ma_sp} không phải số. Vui lòng kiểm tra tồn kho.")
@@ -189,8 +190,11 @@ def process_checkout(cart_items):
                 new_qty = current_qty - qty_sell
                 ws_inventory.update_cell(idx + 2, 4, new_qty)
                 
-                revenue = gia_ban * qty_sell
-                profit = (gia_ban - cost_price) * qty_sell
+                # Lưu số nguyên VND để tránh lỗi định dạng khi ghi Sheets
+                gia_ban_int = int(round(gia_ban))
+                cost_price_int = int(round(cost_price))
+                revenue = gia_ban_int * qty_sell
+                profit = (gia_ban_int - cost_price_int) * qty_sell
                 
                 sales_rows.append([
                     timestamp,
@@ -199,9 +203,9 @@ def process_checkout(cart_items):
                     item['TenSanPham'],
                     item['DonVi'],
                     qty_sell,
-                    gia_ban,
+                    gia_ban_int,
                     revenue,
-                    cost_price,
+                    cost_price_int,
                     profit
                 ])
         
