@@ -6,17 +6,52 @@ from datetime import datetime
 import re  # Để clean symbol robust
 import pytz  # Để set timezone VN
 
-# CLEAN PRICE CHUẨN (chỉ dùng cho đọc sheet string, không dùng cho float từ input)
-def clean_to_float(s):
-    if pd.isna(s):
+# CLEAN PRICE CHUẨN (an toàn cho cả string và số; giữ dấu thập phân để tránh x10)
+def clean_to_float(value):
+    if pd.isna(value):
         return 0.0
-    s = str(s).strip().replace(' ', '')
-    # Remove tất cả ký tự không phải số
-    s = re.sub(r'\D', '', s)
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    s = str(value).strip()
+    if not s:
+        return 0.0
+
+    # Giữ lại số, dấu phẩy, dấu chấm, dấu âm; loại bỏ ký tự tiền tệ/khoảng trắng
+    s = re.sub(r"[^\d,.\-]", "", s)
+    if s in ("", "-", ".", ","):
+        return 0.0
+
+    neg = s.startswith("-")
+    if neg:
+        s = s[1:]
+
+    # Nếu có cả '.' và ',' -> coi ký tự xuất hiện sau cùng là dấu thập phân
+    if "." in s and "," in s:
+        if s.rfind(".") > s.rfind(","):
+            s = s.replace(",", "")
+        else:
+            s = s.replace(".", "").replace(",", ".")
+    else:
+        # Chỉ có ',' -> nếu 3 chữ số cuối thì là ngăn cách nghìn, ngược lại là thập phân
+        if "," in s:
+            parts = s.split(",")
+            if len(parts[-1]) == 3 and all(p.isdigit() for p in parts):
+                s = s.replace(",", "")
+            else:
+                s = s.replace(",", ".")
+        # Chỉ có '.' -> nếu 3 chữ số cuối thì là ngăn cách nghìn, ngược lại là thập phân
+        if "." in s:
+            parts = s.split(".")
+            if len(parts[-1]) == 3 and all(p.isdigit() for p in parts):
+                s = s.replace(".", "")
+
     try:
-        return float(s) if s else 0.0
-    except:
+        num = float(s)
+    except Exception:
         return 0.0
+
+    return -num if neg else num
 
 # --- KET NOI GOOGLE SHEET ---
 def get_connection():
@@ -158,6 +193,7 @@ def process_checkout(cart_items):
             
             # Giá từ cart là float từ number_input → dùng trực tiếp, không clean
             gia_ban = float(item['GiaBan'])
+            gia_ban_int = int(round(gia_ban))
             
             match_idx = df_inv.index[df_inv['MaSanPham'] == ma_sp].tolist()
             
@@ -165,12 +201,13 @@ def process_checkout(cart_items):
                 idx = match_idx[0]
                 current_qty = clean_to_float(df_inv.at[idx, 'SoLuong'])
                 cost_price = clean_to_float(df_inv.at[idx, 'GiaNhap'])
+                cost_price_int = int(round(cost_price))
                 
                 new_qty = current_qty - qty_sell
                 ws_inventory.update_cell(idx + 2, 4, new_qty)
                 
-                revenue = gia_ban * qty_sell
-                profit = (gia_ban - cost_price) * qty_sell
+                revenue = gia_ban_int * qty_sell
+                profit = (gia_ban_int - cost_price_int) * qty_sell
                 
                 sales_rows.append([
                     timestamp,
@@ -179,9 +216,9 @@ def process_checkout(cart_items):
                     item['TenSanPham'],
                     item['DonVi'],
                     qty_sell,
-                    gia_ban,
+                    gia_ban_int,
                     revenue,
-                    cost_price,
+                    cost_price_int,
                     profit
                 ])
         
@@ -212,8 +249,8 @@ def process_import(import_list):
         for item in import_list:
             ma_sp = str(item['MaSanPham'])
             qty_in = item['SoLuong']
-            price_in = float(item['GiaNhap'])  # Đã là float từ input
-            price_out = float(item['GiaBan'])  # Đã là float từ input
+            price_in = int(round(float(item['GiaNhap'])))  # Đã là float từ input
+            price_out = int(round(float(item['GiaBan'])))  # Đã là float từ input
             
             exists = False
             row_idx_update = -1
