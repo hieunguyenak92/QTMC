@@ -156,8 +156,8 @@ def process_checkout(cart_items):
             ma_sp = str(item['MaSanPham'])
             qty_sell = int(item['SoLuongBan'])  # SL luôn int
             
-            # CLEAN GIÁ BÁN TỪ GIỎ (AN TOÀN DÙ STRING)
-            gia_ban = clean_to_float(item['GiaBan'])
+            # GiaBan đã là float từ cart, không cần clean lại
+            gia_ban = item['GiaBan']
             
             match_idx = df_inv.index[df_inv['MaSanPham'] == ma_sp].tolist()
             
@@ -212,8 +212,8 @@ def process_import(import_list):
         for item in import_list:
             ma_sp = str(item['MaSanPham'])
             qty_in = item['SoLuong']
-            price_in = clean_to_float(item['GiaNhap'])  # Clean vì giờ string từ text_input
-            price_out = clean_to_float(item['GiaBan'])  # Clean vì giờ string từ text_input
+            price_in = item['GiaNhap']  # Đã là float từ render_import
+            price_out = item['GiaBan']  # Đã là float từ render_import
             
             exists = False
             row_idx_update = -1
