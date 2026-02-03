@@ -6,52 +6,14 @@ from datetime import datetime
 import re  # Để clean symbol robust
 import pytz  # Để set timezone VN
 
-# CLEAN PRICE CHUẨN (an toàn cho cả string và số; giữ dấu thập phân để tránh x10)
+# NOTE: User request: do not use clean_to_float anymore.
+# Keeping function for backward compatibility if referenced elsewhere,
+# but it is no longer called anywhere in this file.
 def clean_to_float(value):
-    if pd.isna(value):
-        return 0.0
-    if isinstance(value, (int, float)):
-        return float(value)
-
-    s = str(value).strip()
-    if not s:
-        return 0.0
-
-    # Giữ lại số, dấu phẩy, dấu chấm, dấu âm; loại bỏ ký tự tiền tệ/khoảng trắng
-    s = re.sub(r"[^\d,.\-]", "", s)
-    if s in ("", "-", ".", ","):
-        return 0.0
-
-    neg = s.startswith("-")
-    if neg:
-        s = s[1:]
-
-    # Nếu có cả '.' và ',' -> coi ký tự xuất hiện sau cùng là dấu thập phân
-    if "." in s and "," in s:
-        if s.rfind(".") > s.rfind(","):
-            s = s.replace(",", "")
-        else:
-            s = s.replace(".", "").replace(",", ".")
-    else:
-        # Chỉ có ',' -> nếu 3 chữ số cuối thì là ngăn cách nghìn, ngược lại là thập phân
-        if "," in s:
-            parts = s.split(",")
-            if len(parts[-1]) == 3 and all(p.isdigit() for p in parts):
-                s = s.replace(",", "")
-            else:
-                s = s.replace(",", ".")
-        # Chỉ có '.' -> nếu 3 chữ số cuối thì là ngăn cách nghìn, ngược lại là thập phân
-        if "." in s:
-            parts = s.split(".")
-            if len(parts[-1]) == 3 and all(p.isdigit() for p in parts):
-                s = s.replace(".", "")
-
     try:
-        num = float(s)
+        return float(value)
     except Exception:
         return 0.0
-
-    return -num if neg else num
 
 # --- KET NOI GOOGLE SHEET ---
 def get_connection():
@@ -115,10 +77,11 @@ def load_inventory():
             wks = sh.worksheet("TonKho")
             df = safe_get_data(wks)
             
+            # Không dùng clean_to_float; dùng to_numeric tối thiểu để tránh lỗi tính toán
             numeric_cols = ['SoLuong', 'GiaNhap', 'GiaBan']
             for col in numeric_cols:
                 if col in df.columns:
-                    df[col] = df[col].apply(clean_to_float)
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             return df
         except:
             return pd.DataFrame()
@@ -156,10 +119,11 @@ def load_sales_history():
             if 'NgayBan' in df.columns:
                 df['NgayBan'] = pd.to_datetime(df['NgayBan'], errors='coerce')
                 
+            # Không dùng clean_to_float; dùng to_numeric tối thiểu để tránh lỗi tính toán
             numeric_cols = ['SoLuong', 'GiaBan', 'ThanhTien', 'GiaVonLucBan', 'LoiNhuan']
             for col in numeric_cols:
                 if col in df.columns:
-                    df[col] = df[col].apply(clean_to_float)
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             
             return df
         except Exception as e:
@@ -178,9 +142,7 @@ def process_checkout(cart_items):
         
         df_inv = safe_get_data(ws_inventory)
         
-        # Apply clean cho df_inv (an toàn thêm)
-        if 'GiaNhap' in df_inv.columns:
-            df_inv['GiaNhap'] = df_inv['GiaNhap'].apply(clean_to_float)
+        # Không clean dữ liệu tồn kho theo yêu cầu
         
         sales_rows = []
         tz = pytz.timezone('Asia/Ho_Chi_Minh')  # VN time
@@ -191,23 +153,24 @@ def process_checkout(cart_items):
             ma_sp = str(item['MaSanPham'])
             qty_sell = int(item['SoLuongBan'])  # SL luôn int
             
-            # Giá từ cart là float từ number_input → dùng trực tiếp, không clean
-            gia_ban = float(item['GiaBan'])
-            gia_ban_int = int(round(gia_ban))
-            
             match_idx = df_inv.index[df_inv['MaSanPham'] == ma_sp].tolist()
             
             if match_idx:
                 idx = match_idx[0]
-                current_qty = clean_to_float(df_inv.at[idx, 'SoLuong'])
-                cost_price = clean_to_float(df_inv.at[idx, 'GiaNhap'])
-                cost_price_int = int(round(cost_price))
+                try:
+                    current_qty = float(df_inv.at[idx, 'SoLuong'])
+                    # Lấy giá bán và giá nhập trực tiếp từ tồn kho theo yêu cầu
+                    gia_ban = float(df_inv.at[idx, 'GiaBan'])
+                    cost_price = float(df_inv.at[idx, 'GiaNhap'])
+                except Exception:
+                    st.error(f"Dữ liệu giá/SL của sản phẩm {ma_sp} không phải số. Vui lòng kiểm tra tồn kho.")
+                    return False
                 
                 new_qty = current_qty - qty_sell
                 ws_inventory.update_cell(idx + 2, 4, new_qty)
                 
-                revenue = gia_ban_int * qty_sell
-                profit = (gia_ban_int - cost_price_int) * qty_sell
+                revenue = gia_ban * qty_sell
+                profit = (gia_ban - cost_price) * qty_sell
                 
                 sales_rows.append([
                     timestamp,
@@ -216,9 +179,9 @@ def process_checkout(cart_items):
                     item['TenSanPham'],
                     item['DonVi'],
                     qty_sell,
-                    gia_ban_int,
+                    gia_ban,
                     revenue,
-                    cost_price_int,
+                    cost_price,
                     profit
                 ])
         
