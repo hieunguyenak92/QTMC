@@ -214,15 +214,34 @@ def render_sales(df_inv):
         else:
             st.caption("Chưa có hàng trong giỏ.")
 
-    # Thêm bảng thống kê hàng đã bán trong ngày
-    st.subheader("📋 Danh sách hàng đã bán hôm nay")
+    # Thêm bảng thống kê hàng đã bán theo ngày
+    st.subheader("📋 Danh sách hàng đã bán")
     df_sales = dm.load_sales_history()
     if not df_sales.empty and 'NgayBan' in df_sales.columns:
         tz = pytz.timezone('Asia/Ho_Chi_Minh')
-        today_str = datetime.now(tz).strftime('%Y-%m-%d')
-        df_today = df_sales[(df_sales['NgayBan'].dt.strftime('%Y-%m-%d') == today_str) & (df_sales['SoLuong'] > 0)]
-        if not df_today.empty:
-            df_summary = df_today.groupby(['MaSanPham', 'TenSanPham']).agg({
+        today_date = datetime.now(tz).date()
+
+        valid_dates = df_sales['NgayBan'].dropna().dt.date
+        if not valid_dates.empty:
+            min_date = valid_dates.min()
+            max_date = valid_dates.max()
+            default_date = today_date if min_date <= today_date <= max_date else max_date
+        else:
+            min_date = today_date
+            max_date = today_date
+            default_date = today_date
+
+        selected_date = st.date_input(
+            "Chọn ngày xem",
+            value=default_date,
+            min_value=min_date,
+            max_value=max_date,
+            key="sales_day_filter"
+        )
+
+        df_day = df_sales[(df_sales['NgayBan'].dt.date == selected_date) & (df_sales['SoLuong'] > 0)]
+        if not df_day.empty:
+            df_summary = df_day.groupby(['MaSanPham', 'TenSanPham']).agg({
                 'SoLuong': 'sum',
                 'ThanhTien': 'sum',
                 'LoiNhuan': 'sum'
@@ -230,9 +249,10 @@ def render_sales(df_inv):
             df_summary.columns = ['Mã SP', 'Tên SP', 'Số lượng bán', 'Tổng thành tiền', 'Tổng lợi nhuận']
             df_summary['Tổng thành tiền'] = df_summary['Tổng thành tiền'].apply(format_currency)
             df_summary['Tổng lợi nhuận'] = df_summary['Tổng lợi nhuận'].apply(format_currency)
+            st.caption(f"Ngày: {selected_date.strftime('%d/%m/%Y')}")
             st.table(df_summary)
         else:
-            st.info("Hôm nay chưa có hàng nào được bán.")
+            st.info(f"Không có hàng bán ngày {selected_date.strftime('%d/%m/%Y')}.")
     else:
         st.info("Chưa có dữ liệu bán hàng.")
 
