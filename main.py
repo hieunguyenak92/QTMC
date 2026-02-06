@@ -281,6 +281,43 @@ def render_import(df_inv):
                             st.rerun()
                         else:
                             st.error("Giá không hợp lệ!")
+                
+                st.divider()
+                with st.container(border=True):
+                    st.markdown("### Cập nhật giá vốn")
+                    with st.form("f_update_price"):
+                        c1, c2 = st.columns(2)
+                        new_cost = c1.number_input(
+                            "Giá vốn mới (đ)",
+                            value=float(item['GiaNhap']),
+                            step=1000.0,
+                            format="%.0f"
+                        )
+                        update_sale = c2.checkbox("Cập nhật cả giá bán", value=False)
+                        new_sale = st.number_input(
+                            "Giá bán mới (đ)",
+                            value=float(item['GiaBan']),
+                            step=1000.0,
+                            format="%.0f",
+                            disabled=not update_sale
+                        )
+
+                        if st.form_submit_button("Cập nhật giá"):
+                            if new_cost <= 0:
+                                st.error("Giá vốn không hợp lệ!")
+                            elif update_sale and new_sale <= 0:
+                                st.error("Giá bán không hợp lệ!")
+                            else:
+                                ok = dm.update_product_prices(
+                                    item['MaSanPham'],
+                                    new_cost,
+                                    new_sale if update_sale else None
+                                )
+                                if ok:
+                                    st.success("Đã cập nhật giá thành công!")
+                                    st.rerun()
+                                else:
+                                    st.error("Cập nhật thất bại. Vui lòng kiểm tra dữ liệu.")
 
     with tab2:
         # Tính mã sản phẩm mới: Lấy mã cuối cùng +1
@@ -304,7 +341,7 @@ def render_import(df_inv):
             m_id = c1.text_input("Mã SP (*)", value=next_id)
             m_ten = c2.text_input("Tên SP (*)")
             c3, c4, c5 = st.columns(3)
-            m_dv = c3.selectbox("Đơn vị", ["Viên", "Vỉ", "Hộp", "Lọ", "Tuýp", "Gói", "Liều", "Ống"])
+            m_dv = c3.selectbox("Đơn vị", ["Viên", "Vỉ", "Hộp", "Lọ", "Tuýp"])
             m_ncc = c4.text_input("Nhà cung cấp")
             m_sl = c5.number_input("SL ban đầu", min_value=1, value=1)
             c6, c7 = st.columns(2)
