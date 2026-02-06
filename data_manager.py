@@ -291,6 +291,46 @@ def process_import(import_list):
         st.error(f"Lỗi nhập hàng: {str(e)}")
         return False
 
+# --- 4b. CAP NHAT GIA VON / GIA BAN ---
+def update_product_prices(product_id, cost_price, sale_price=None):
+    sh = get_connection()
+    if not sh:
+        return False
+
+    try:
+        ws_inventory = sh.worksheet("TonKho")
+        df_inv = safe_get_data(ws_inventory)
+        if df_inv.empty or 'MaSanPham' not in df_inv.columns:
+            return False
+
+        df_inv['MaSanPham'] = df_inv['MaSanPham'].astype(str).str.strip()
+        pid = str(product_id).strip()
+
+        match_idx = df_inv.index[df_inv['MaSanPham'] == pid].tolist()
+        if not match_idx:
+            return False
+
+        idx = match_idx[0]
+        cost_int = int(round(float(cost_price)))
+        if cost_int <= 0:
+            st.error("Giá vốn không hợp lệ.")
+            return False
+
+        ws_inventory.update_cell(idx + 2, 5, cost_int)
+
+        if sale_price is not None:
+            sale_int = int(round(float(sale_price)))
+            if sale_int <= 0:
+                st.error("Giá bán không hợp lệ.")
+                return False
+            ws_inventory.update_cell(idx + 2, 6, sale_int)
+
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Lỗi cập nhật giá: {e}")
+        return False
+
 # --- 5. XU LY HOAN TRA (GIỮ NGUYÊN: XÓA DÒNG → KHÔNG CÒN _RET) ---
 def process_return(order_id, product_id, qty_return):
     sh = get_connection()
