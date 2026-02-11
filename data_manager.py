@@ -22,6 +22,33 @@ def _extract_sheet_key(sheet_url):
     m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", sheet_url)
     return m.group(1) if m else None
 
+def _parse_sheet_datetime_series(series):
+    # Parse cả chuỗi ngày thường và serial date từ Google Sheets.
+    parsed = pd.to_datetime(series, errors='coerce')
+    numeric_vals = pd.to_numeric(series, errors='coerce')
+    serial_mask = parsed.isna() & numeric_vals.notna()
+    if serial_mask.any():
+        parsed.loc[serial_mask] = pd.to_datetime(
+            numeric_vals.loc[serial_mask],
+            unit='D',
+            origin='1899-12-30',
+            errors='coerce'
+        )
+    return parsed
+
+def _get_sheet_headers(worksheet):
+    try:
+        headers = worksheet.row_values(1)
+    except Exception:
+        headers = []
+    return [str(h).strip() for h in headers]
+
+def _ensure_sheet_column(worksheet, headers, column_name):
+    if column_name not in headers:
+        worksheet.update_cell(1, len(headers) + 1, column_name)
+        headers.append(column_name)
+    return headers
+
 # --- KET NOI GOOGLE SHEET ---
 def get_connection():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -167,6 +194,55 @@ def load_sales_history():
             return pd.DataFrame()
     return pd.DataFrame()
 
+# --- 2b. TAI DU LIEU CONG NO ---
+@st.cache_data(ttl=60)
+def load_debt_records():
+    sh = get_connection()
+    COL_NAMES = ['TenKH', 'Ngay', 'TenSanPham', 'SoLuong', 'ThanhTien']
+    if sh:
+        try:
+            wks = sh.worksheet("CongNo")
+            df = safe_get_data(wks)
+
+            if df.empty:
+                return pd.DataFrame(columns=COL_NAMES + ['MaPhieuNo', 'NgayRaw', 'NgayParsed'])
+
+            df.columns = [str(c).strip() for c in df.columns]
+            for col in COL_NAMES:
+                if col not in df.columns:
+                    df[col] = ''
+            if 'MaPhieuNo' not in df.columns:
+                df['MaPhieuNo'] = ''
+
+            df = df[COL_NAMES + ['MaPhieuNo'] + [c for c in df.columns if c not in COL_NAMES + ['MaPhieuNo']]]
+            df['TenKH'] = df['TenKH'].astype(str).str.strip()
+            df['TenSanPham'] = df['TenSanPham'].astype(str).str.strip()
+            df['NgayRaw'] = df['Ngay'].astype(str).str.strip()
+            df['NgayParsed'] = _parse_sheet_datetime_series(df['Ngay'])
+            df['SoLuong'] = pd.to_numeric(df['SoLuong'], errors='coerce').fillna(0)
+            df['ThanhTien'] = pd.to_numeric(df['ThanhTien'], errors='coerce').fillna(0)
+            df['MaPhieuNo'] = df['MaPhieuNo'].astype(str).str.strip()
+
+            legacy_fallback = (
+                "LEGACY|"
+                + df['TenKH'].astype(str).str.strip()
+                + "|"
+                + df['NgayRaw'].astype(str).str.strip()
+            )
+            df.loc[df['MaPhieuNo'] == '', 'MaPhieuNo'] = legacy_fallback[df['MaPhieuNo'] == '']
+
+            # Nếu sheet có cột trạng thái, chỉ lấy công nợ chưa thanh toán.
+            if 'TrangThai' in df.columns:
+                unpaid_mask = ~df['TrangThai'].astype(str).str.strip().str.lower().isin(['datra', 'da tra', 'paid'])
+                df = df[unpaid_mask]
+
+            df = df[(df['TenKH'] != '') & (df['TenSanPham'] != '')]
+            return df.reset_index(drop=True)
+        except Exception as e:
+            st.warning(f"Lỗi tải công nợ: {e}")
+            return pd.DataFrame(columns=COL_NAMES + ['MaPhieuNo', 'NgayRaw', 'NgayParsed'])
+    return pd.DataFrame(columns=COL_NAMES + ['MaPhieuNo', 'NgayRaw', 'NgayParsed'])
+
 # --- 3. XU LY BAN HANG (FIX: không clean giá từ cart vì đã là float) ---
 def process_checkout(cart_items):
     sh = get_connection()
@@ -240,6 +316,109 @@ def process_checkout(cart_items):
         st.error(f"Lỗi: {str(e)}")
         return False
     return False
+
+# --- 3b. XU LY BAN NO (CONG NO) ---
+def process_debt_checkout(customer_name, cart_items):
+    sh = get_connection()
+    if not sh:
+        return False
+
+    customer_name = str(customer_name).strip()
+    if not customer_name:
+        st.error("Vui lòng nhập tên khách hàng.")
+        return False
+    if not cart_items:
+        st.error("Giỏ công nợ đang trống.")
+        return False
+
+    try:
+        ws_inventory = sh.worksheet("TonKho")
+        ws_debt = sh.worksheet("CongNo")
+        debt_headers = _get_sheet_headers(ws_debt)
+        if not debt_headers:
+            debt_headers = ['TenKH', 'Ngay', 'TenSanPham', 'SoLuong', 'ThanhTien']
+            for col_idx, col_name in enumerate(debt_headers, start=1):
+                ws_debt.update_cell(1, col_idx, col_name)
+
+        for col_name in ['TenKH', 'Ngay', 'TenSanPham', 'SoLuong', 'ThanhTien', 'MaPhieuNo']:
+            debt_headers = _ensure_sheet_column(ws_debt, debt_headers, col_name)
+
+        header_idx = {name: idx for idx, name in enumerate(debt_headers)}
+
+        df_inv = load_inventory()
+        if df_inv.empty:
+            st.error("Không tải được dữ liệu tồn kho.")
+            return False
+        if 'MaSanPham' not in df_inv.columns:
+            st.error("Sheet tồn kho thiếu cột MaSanPham.")
+            return False
+
+        df_inv['MaSanPham'] = df_inv['MaSanPham'].astype(str).str.strip()
+
+        # Validate toàn bộ trước để tránh ghi dở dang.
+        inventory_updates = []
+        debt_rows = []
+        for item in cart_items:
+            ma_sp = str(item.get('MaSanPham', '')).strip()
+            ten_sp = str(item.get('TenSanPham', '')).strip()
+
+            try:
+                qty_sell = int(item.get('SoLuongBan', 0))
+                sale_price_int = int(round(float(item.get('GiaBan', 0))))
+            except Exception:
+                st.error(f"Dữ liệu sản phẩm {ten_sp or ma_sp} không hợp lệ.")
+                return False
+
+            if qty_sell <= 0 or sale_price_int <= 0:
+                st.error(f"Số lượng/giá bán của sản phẩm {ten_sp or ma_sp} không hợp lệ.")
+                return False
+
+            match_idx = df_inv.index[df_inv['MaSanPham'] == ma_sp].tolist()
+            if not match_idx:
+                st.error(f"Không tìm thấy sản phẩm mã {ma_sp} trong tồn kho.")
+                return False
+
+            idx = match_idx[0]
+            current_qty = float(pd.to_numeric(df_inv.at[idx, 'SoLuong'], errors='coerce'))
+            if pd.isna(current_qty):
+                st.error(f"Dữ liệu số lượng tồn kho của {ten_sp or ma_sp} không hợp lệ.")
+                return False
+            if qty_sell > current_qty:
+                st.error(f"Sản phẩm {ten_sp or ma_sp} không đủ tồn kho.")
+                return False
+
+            new_qty = current_qty - qty_sell
+            df_inv.at[idx, 'SoLuong'] = new_qty
+            inventory_updates.append((idx + 2, new_qty))
+            debt_rows.append([ten_sp, qty_sell, sale_price_int * qty_sell])
+
+        tz = pytz.timezone('Asia/Ho_Chi_Minh')
+        timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        debt_id = datetime.now(tz).strftime("CN%Y%m%d%H%M%S%f")[:-3]
+
+        for row_idx, new_qty in inventory_updates:
+            ws_inventory.update_cell(row_idx, 4, new_qty)
+
+        rows_to_append = []
+        for ten_sp, qty_sell, thanh_tien in debt_rows:
+            debt_row = [''] * len(debt_headers)
+            debt_row[header_idx['TenKH']] = customer_name
+            debt_row[header_idx['Ngay']] = timestamp
+            debt_row[header_idx['TenSanPham']] = ten_sp
+            debt_row[header_idx['SoLuong']] = qty_sell
+            debt_row[header_idx['ThanhTien']] = thanh_tien
+            debt_row[header_idx['MaPhieuNo']] = debt_id
+            if 'TrangThai' in header_idx:
+                debt_row[header_idx['TrangThai']] = 'ChuaTra'
+            rows_to_append.append(debt_row)
+
+        ws_debt.append_rows(rows_to_append)
+
+        st.cache_data.clear()
+        return debt_id
+    except Exception as e:
+        st.error(f"Lỗi tạo công nợ: {e}")
+        return False
 
 # --- 4. XU LY NHAP HANG (FIX: không clean giá từ list vì đã là float) ---
 def process_import(import_list):
@@ -366,4 +545,67 @@ def process_return(order_id, product_id, qty_return):
         return True
     except Exception as e:
         st.error(f"Lỗi hoàn trả: {e}")
+        return False
+
+# --- 6. XU LY THANH TOAN CONG NO ---
+def settle_debt(debt_id, customer_name=None, debt_time_raw=None):
+    sh = get_connection()
+    if not sh:
+        return False
+
+    debt_id = str(debt_id).strip()
+    customer_name = str(customer_name).strip()
+    debt_time_raw = str(debt_time_raw).strip()
+    if not debt_id and (not customer_name or not debt_time_raw):
+        return False
+
+    try:
+        ws_debt = sh.worksheet("CongNo")
+        try:
+            records = ws_debt.get("A:Z", value_render_option='UNFORMATTED_VALUE')
+        except Exception:
+            try:
+                records = ws_debt.get_all_values(value_render_option='UNFORMATTED_VALUE')
+            except Exception:
+                records = ws_debt.get_all_values()
+        if len(records) < 2:
+            return False
+
+        headers = [str(h).strip() for h in records[0]]
+        idx_customer = headers.index('TenKH') if 'TenKH' in headers else 0
+        idx_time = headers.index('Ngay') if 'Ngay' in headers else 1
+        idx_debt = headers.index('MaPhieuNo') if 'MaPhieuNo' in headers else -1
+        idx_status = headers.index('TrangThai') if 'TrangThai' in headers else -1
+
+        matched_rows = []
+        for i in range(1, len(records)):
+            row = records[i]
+            record_debt_id = str(row[idx_debt]).strip() if idx_debt >= 0 and idx_debt < len(row) else ''
+            ten_kh = str(row[idx_customer]).strip() if idx_customer < len(row) else ''
+            record_time = str(row[idx_time]).strip() if idx_time < len(row) else ''
+
+            is_match = False
+            if debt_id and record_debt_id:
+                is_match = (record_debt_id == debt_id)
+            elif customer_name and debt_time_raw:
+                is_match = (ten_kh == customer_name and record_time == debt_time_raw)
+
+            if is_match:
+                matched_rows.append(i + 1)  # Sheet row index
+
+        if not matched_rows:
+            return False
+
+        if idx_status >= 0:
+            for sheet_row in matched_rows:
+                ws_debt.update_cell(sheet_row, idx_status + 1, 'DaTra')
+        else:
+            # Xóa từ dưới lên để không lệch index.
+            for sheet_row in sorted(matched_rows, reverse=True):
+                ws_debt.delete_rows(sheet_row)
+
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Lỗi cập nhật công nợ: {e}")
         return False
