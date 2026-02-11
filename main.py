@@ -953,13 +953,16 @@ def render_reports(df_inv):
     with t2:
         tz = pytz.timezone('Asia/Ho_Chi_Minh')  # VN time
         if not df_sales.empty and 'NgayBan' in df_sales.columns:
+            order_values = df_sales['MaHoaDon'] if 'MaHoaDon' in df_sales.columns else ''
+            df_sales['MaHoaDon'] = pd.Series(order_values, index=df_sales.index).fillna('').astype(str).str.strip()
+
             df_sales['NgayBan'] = pd.to_datetime(df_sales['NgayBan'], errors='coerce')
             today_str = datetime.now(tz).strftime('%Y-%m-%d')
             df_today_sales = df_sales[(df_sales['NgayBan'].dt.strftime('%Y-%m-%d') == today_str) & (df_sales['SoLuong'] > 0)]
             
             today_revenue = df_today_sales['ThanhTien'].sum()
             today_profit = df_today_sales['LoiNhuan'].sum()
-            today_orders = df_today_sales['MaDonHang'].nunique()
+            today_orders = df_today_sales['MaHoaDon'].replace('', pd.NA).dropna().nunique()
             
             col1, col2, col3 = st.columns(3)
             col1.metric("Doanh thu hôm nay", format_currency(today_revenue))
@@ -978,9 +981,11 @@ def render_reports(df_inv):
                 day_revenue = df_selected_day[df_selected_day['SoLuong'] > 0]['ThanhTien'].sum()
                 st.info(f"**Tổng doanh thu ngày {selected_date.strftime('%d/%m/%Y')}: {format_currency(day_revenue)}**")
                 
-                orders = df_selected_day.groupby('MaDonHang')
+                orders = df_selected_day.groupby('MaHoaDon')
                 
                 for order_id, order_df in orders:
+                    if str(order_id).strip() == '':
+                        continue
                     order_time = order_df['NgayBan'].min().strftime('%H:%M')
                     order_total = order_df[order_df['SoLuong'] > 0]['ThanhTien'].sum()
                     num_items = len(order_df[order_df['SoLuong'] > 0])
@@ -995,7 +1000,7 @@ def render_reports(df_inv):
                                     c3.write(f"Giá: {format_currency(row['GiaBan'])}")
                                     c4.write(f"Thành tiền: {format_currency(row['ThanhTien'])}")
                                     if c5.button("Hoàn trả", key=f"ret_detail_{order_id}_{idx}"):
-                                        if dm.process_return(row['MaDonHang'], row['MaSanPham'], row['SoLuong']):
+                                        if dm.process_return(row['MaHoaDon'], row['MaSanPham'], row['SoLuong']):
                                             st.success(f"Đã hoàn trả {row['TenSanPham']} thành công!")
                                             st.rerun()
             else:
