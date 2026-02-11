@@ -367,11 +367,19 @@ def render_sales(df_inv):
         df_day = df_sales[(df_sales['NgayBan'].dt.date == selected_date) & (df_sales['SoLuong'] > 0)]
         if not df_day.empty:
             df_day = df_day.copy()
-            if 'HinhThucThanhToan' not in df_day.columns:
-                df_day['HinhThucThanhToan'] = 'Tiền mặt'
-            df_day['HinhThucThanhToan'] = df_day['HinhThucThanhToan'].fillna('').astype(str).str.strip()
+            payment_main = df_day['HinhThucThanhToan'] if 'HinhThucThanhToan' in df_day.columns else ''
+            payment_alt = df_day['HinhThucTT'] if 'HinhThucTT' in df_day.columns else ''
+            payment_main = pd.Series(payment_main, index=df_day.index).fillna('').astype(str).str.strip()
+            payment_alt = pd.Series(payment_alt, index=df_day.index).fillna('').astype(str).str.strip()
+            df_day['HinhThucThanhToan'] = payment_main.where(payment_main != '', payment_alt)
+
             payment_norm = df_day['HinhThucThanhToan'].str.lower()
-            is_transfer = payment_norm.str.contains('chuy') | payment_norm.str.contains('khoan') | payment_norm.str.contains('bank')
+            is_transfer = (
+                payment_norm.str.contains('chuy')
+                | payment_norm.str.contains('khoan')
+                | payment_norm.str.contains('bank')
+                | payment_norm.eq('ck')
+            )
 
             total_day = df_day['ThanhTien'].sum()
             transfer_day = df_day.loc[is_transfer, 'ThanhTien'].sum()
