@@ -55,6 +55,20 @@ def _ensure_sheet_column(worksheet, headers, column_name):
         headers.append(column_name)
     return headers
 
+def _normalize_id_text(value):
+    txt = str(value).strip()
+    if txt == '' or txt.lower() == 'nan':
+        return ''
+    txt_l = txt.lower()
+    # Chuẩn hóa các dạng số như 20260211112233.0 hoặc 2.0260211112233e+13
+    try:
+        num = float(txt_l)
+        if num.is_integer():
+            return str(int(num))
+    except Exception:
+        pass
+    return txt
+
 # --- KET NOI GOOGLE SHEET ---
 def get_connection():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -359,7 +373,7 @@ def process_checkout(cart_items, payment_method='Tiền mặt'):
             ws_sales.update(
                 f"{start_cell}:{end_cell}",
                 sales_rows,
-                value_input_option='USER_ENTERED'
+                value_input_option='RAW'
             )
 
             # Ép ghi lại cột HinhThucTT để chắc chắn luôn có giá trị thanh toán.
@@ -370,7 +384,7 @@ def process_checkout(cart_items, payment_method='Tiền mặt'):
             ws_sales.update(
                 f"{pay_start}:{pay_end}",
                 pay_values,
-                value_input_option='USER_ENTERED'
+                value_input_option='RAW'
             )
             st.cache_data.clear()
             return True
@@ -599,10 +613,22 @@ def process_return(order_id, product_id, qty_return):
         ws_inventory = sh.worksheet("TonKho")
 
         records = ws_sales.get_all_values()
+        if len(records) < 2:
+            return False
+
+        headers = [str(h).strip() for h in records[0]]
+        idx_map = {name: i for i, name in enumerate(headers)}
+        idx_order = idx_map.get('MaDonHang', 1)
+        idx_product = idx_map.get('MaSanPham', 2)
+
+        target_order = _normalize_id_text(order_id)
+        target_product = str(product_id).strip()
         row_to_delete = None
         for i in range(1, len(records)):
             row = records[i]
-            if len(row) >= 10 and str(row[1]).strip() == str(order_id) and str(row[2]).strip() == str(product_id):
+            order_val = _normalize_id_text(row[idx_order]) if idx_order < len(row) else ''
+            product_val = str(row[idx_product]).strip() if idx_product < len(row) else ''
+            if order_val == target_order and product_val == target_product:
                 row_to_delete = i + 1  # Row index in sheet (1-based)
                 break
 
@@ -614,11 +640,17 @@ def process_return(order_id, product_id, qty_return):
 
         # Cập nhật tồn kho
         df_inv = safe_get_data(ws_inventory)
-        match_idx = df_inv.index[df_inv['MaSanPham'] == str(product_id)].tolist()
+        if 'MaSanPham' in df_inv.columns:
+            df_inv['MaSanPham'] = df_inv['MaSanPham'].astype(str).str.strip()
+        qty_return_num = float(pd.to_numeric(qty_return, errors='coerce'))
+        if pd.isna(qty_return_num):
+            qty_return_num = 0.0
+
+        match_idx = df_inv.index[df_inv['MaSanPham'] == str(product_id).strip()].tolist()
         if match_idx:
             idx = match_idx[0]
             current_qty = float(df_inv.at[idx, 'SoLuong'])
-            ws_inventory.update_cell(idx + 2, 4, current_qty + qty_return)
+            ws_inventory.update_cell(idx + 2, 4, current_qty + qty_return_num)
 
         st.cache_data.clear()
         return True
