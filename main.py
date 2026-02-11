@@ -341,7 +341,7 @@ def render_import(df_inv):
             m_id = c1.text_input("Mã SP (*)", value=next_id)
             m_ten = c2.text_input("Tên SP (*)")
             c3, c4, c5 = st.columns(3)
-            m_dv = c3.selectbox("Đơn vị", ["Viên", "Vỉ", "Hộp", "Lọ", "Tuýp","Gói","Chai","Ống","Cái""Liều"])
+            m_dv = c3.selectbox("Đơn vị", ["Viên", "Vỉ", "Hộp", "Lọ", "Tuýp","Gói","Chai","Ống","Cái","Liều"])
             m_ncc = c4.text_input("Nhà cung cấp")
             m_sl = c5.number_input("SL ban đầu", min_value=1, value=1)
             c6, c7 = st.columns(2)
