@@ -309,6 +309,23 @@ def render_debt(df_inv):
 
     tz = pytz.timezone('Asia/Ho_Chi_Minh')
     now_vn = datetime.now(tz)
+
+    # Chuẩn hóa kiểu dữ liệu tồn kho để tránh lỗi .str/.astype khi dữ liệu sheet không đồng nhất.
+    if df_inv is None or df_inv.empty:
+        st.warning("Kho hàng trống.")
+        return
+    required_inv_cols = ['MaSanPham', 'TenSanPham', 'DonVi', 'SoLuong', 'GiaNhap', 'GiaBan']
+    missing_inv_cols = [c for c in required_inv_cols if c not in df_inv.columns]
+    if missing_inv_cols:
+        st.error(f"Sheet TonKho thiếu cột: {', '.join(missing_inv_cols)}")
+        return
+
+    inv = df_inv.copy()
+    for c in ['MaSanPham', 'TenSanPham', 'DonVi']:
+        inv[c] = inv[c].fillna('').astype(str).str.strip()
+    for c in ['SoLuong', 'GiaNhap', 'GiaBan']:
+        inv[c] = pd.to_numeric(inv[c], errors='coerce').fillna(0)
+
     customer_name = st.text_input("Tên khách hàng mua nợ (*)", key="debt_customer_name").strip()
     d1, d2 = st.columns([1, 1])
     debt_purchase_date = d1.date_input("Ngày mua nợ", value=now_vn.date(), key="debt_purchase_date")
@@ -324,16 +341,17 @@ def render_debt(df_inv):
 
     with col_search:
         st.info("Tìm kiếm sản phẩm để thêm vào giỏ nợ")
-        if not df_inv.empty:
+        if not inv.empty:
             search_term = st.text_input("🔍 Nhập tên hoặc mã sản phẩm", key="debt_search")
 
-            filtered_df = df_inv
+            filtered_df = inv
             if search_term:
-                filtered_df = df_inv[
-                    df_inv['TenSanPham'].str.contains(search_term, case=False, na=False) |
-                    df_inv['MaSanPham'].str.contains(search_term, case=False, na=False)
+                filtered_df = inv[
+                    inv['TenSanPham'].str.contains(search_term, case=False, na=False) |
+                    inv['MaSanPham'].str.contains(search_term, case=False, na=False)
                 ]
 
+            filtered_df = filtered_df.reset_index(drop=True)
             if not filtered_df.empty:
                 options = filtered_df.apply(
                     lambda x: f"{x['TenSanPham']} | Mã: {x['MaSanPham']} | Tồn: {int(x['SoLuong'])} {x['DonVi']}", axis=1
@@ -341,11 +359,15 @@ def render_debt(df_inv):
                 selected_str = st.selectbox("Chọn sản phẩm:", [""] + options, key="debt_select")
 
                 if selected_str:
-                    selected_item = filtered_df[
+                    selected_rows = filtered_df[
                         filtered_df.apply(
                             lambda x: f"{x['TenSanPham']} | Mã: {x['MaSanPham']} | Tồn: {int(x['SoLuong'])} {x['DonVi']}", axis=1
                         ) == selected_str
-                    ].iloc[0]
+                    ]
+                    if selected_rows.empty:
+                        st.error("Không xác định được sản phẩm đã chọn. Vui lòng chọn lại.")
+                        return
+                    selected_item = selected_rows.iloc[0]
 
                     with st.container(border=True):
                         st.markdown(f"### {selected_item['TenSanPham']}")
@@ -495,6 +517,8 @@ def render_debt(df_inv):
     df_debt['ThanhTien'] = pd.to_numeric(df_debt.get('ThanhTien', 0), errors='coerce').fillna(0)
     df_debt['TienDaTra'] = pd.to_numeric(df_debt['TienDaTra'], errors='coerce').fillna(0)
     df_debt['TienConLai'] = pd.to_numeric(df_debt['TienConLai'], errors='coerce').fillna(0)
+    df_debt['SoLuong'] = pd.to_numeric(df_debt.get('SoLuong', 0), errors='coerce').fillna(0)
+    df_debt['NgayParsed'] = pd.to_datetime(df_debt['NgayParsed'], errors='coerce')
 
     st.markdown("#### Bộ lọc công nợ")
     fc1, fc2, fc3 = st.columns([2, 1, 1])
@@ -518,6 +542,7 @@ def render_debt(df_inv):
             filtered_debt['TenKH'].str.contains(customer_filter, case=False, na=False)
         ]
     if not filtered_debt.empty:
+        filtered_debt['NgayParsed'] = pd.to_datetime(filtered_debt['NgayParsed'], errors='coerce')
         debt_dates = filtered_debt['NgayParsed'].dt.date
         filtered_debt = filtered_debt[(debt_dates >= date_from) & (debt_dates <= date_to)]
 
