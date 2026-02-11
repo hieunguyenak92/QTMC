@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, date
+import inspect
 import os
 import data_manager as dm
 import pytz  # Để set timezone VN
@@ -48,6 +49,47 @@ if 'debt_selected' not in st.session_state:
 def format_currency(amount):
     # VN style: dot nghìn, no decimal
     return f"{amount:,.0f} đ".replace(',', '.')
+
+def process_debt_checkout_safe(customer_name, cart_items, debt_datetime):
+    fn = getattr(dm, "process_debt_checkout", None)
+    if not callable(fn):
+        st.error("Thiếu hàm `process_debt_checkout` trong `data_manager.py`. Vui lòng deploy đồng bộ cả `main.py` và `data_manager.py`.")
+        return False
+
+    try:
+        sig = inspect.signature(fn)
+        if 'debt_datetime' in sig.parameters:
+            return fn(customer_name, cart_items, debt_datetime)
+        return fn(customer_name, cart_items)
+    except TypeError:
+        return fn(customer_name, cart_items)
+
+def settle_debt_safe(debt_id, payment_amount, customer_name=None, debt_time_raw=None):
+    fn = getattr(dm, "settle_debt", None)
+    if not callable(fn):
+        return {"ok": False, "message": "Thiếu hàm `settle_debt` trong `data_manager.py`. Vui lòng deploy đồng bộ code."}
+
+    try:
+        sig = inspect.signature(fn)
+        params = list(sig.parameters.keys())
+        if 'payment_amount' in sig.parameters:
+            result = fn(debt_id, payment_amount, customer_name, debt_time_raw)
+        elif len(params) >= 3:
+            result = fn(debt_id, customer_name, debt_time_raw)
+        elif len(params) == 2 and 'customer_name' in params and 'debt_time_raw' in params:
+            result = fn(customer_name, debt_time_raw)
+        else:
+            result = fn(debt_id, customer_name, debt_time_raw)
+    except TypeError:
+        result = fn(debt_id, customer_name, debt_time_raw)
+
+    if isinstance(result, dict):
+        return result
+    if isinstance(result, bool):
+        if result:
+            return {"ok": True, "status_text": "Đã cập nhật công nợ.", "remaining": 0}
+        return {"ok": False, "message": "Không thể cập nhật công nợ."}
+    return {"ok": False, "message": "Kết quả cập nhật công nợ không hợp lệ."}
 
 # --- RENDER HEADER ---
 def render_header():
@@ -265,7 +307,18 @@ def render_debt(df_inv):
     st.subheader("🧾 Quản Lý Công Nợ")
     st.info("Tạo đơn bán nợ và theo dõi trạng thái thanh toán của khách hàng.")
 
+    tz = pytz.timezone('Asia/Ho_Chi_Minh')
+    now_vn = datetime.now(tz)
     customer_name = st.text_input("Tên khách hàng mua nợ (*)", key="debt_customer_name").strip()
+    d1, d2 = st.columns([1, 1])
+    debt_purchase_date = d1.date_input("Ngày mua nợ", value=now_vn.date(), key="debt_purchase_date")
+    debt_purchase_time = d2.time_input(
+        "Giờ mua nợ",
+        value=now_vn.replace(tzinfo=None, second=0, microsecond=0).time(),
+        step=60,
+        key="debt_purchase_time"
+    )
+    debt_purchase_dt = tz.localize(datetime.combine(debt_purchase_date, debt_purchase_time))
 
     col_search, col_cart = st.columns([5, 5], gap="large")
 
@@ -408,7 +461,11 @@ def render_debt(df_inv):
                 if not customer_name:
                     st.error("Vui lòng nhập tên khách hàng trước khi lưu công nợ.")
                 else:
-                    debt_id = dm.process_debt_checkout(customer_name, st.session_state['debt_cart'])
+                    debt_id = process_debt_checkout_safe(
+                        customer_name,
+                        st.session_state['debt_cart'],
+                        debt_purchase_dt
+                    )
                     if debt_id:
                         st.session_state['debt_cart'] = []
                         st.success(f"Đã lưu công nợ thành công! Mã phiếu nợ: {debt_id}")
@@ -424,12 +481,26 @@ def render_debt(df_inv):
         st.info("Hiện chưa có công nợ nào.")
         return
 
+    # Fallback để tương thích nếu data_manager đang ở bản cũ hơn.
+    if 'NgayRaw' not in df_debt.columns and 'Ngay' in df_debt.columns:
+        df_debt['NgayRaw'] = df_debt['Ngay'].astype(str).str.strip()
+    if 'NgayParsed' not in df_debt.columns and 'NgayRaw' in df_debt.columns:
+        df_debt['NgayParsed'] = pd.to_datetime(df_debt['NgayRaw'], errors='coerce')
+    if 'MaPhieuNo' not in df_debt.columns:
+        df_debt['MaPhieuNo'] = "LEGACY|" + df_debt['TenKH'].astype(str).str.strip() + "|" + df_debt['NgayRaw'].astype(str).str.strip()
+    if 'TienDaTra' not in df_debt.columns:
+        df_debt['TienDaTra'] = 0
+    if 'TienConLai' not in df_debt.columns:
+        df_debt['TienConLai'] = pd.to_numeric(df_debt.get('ThanhTien', 0), errors='coerce').fillna(0)
+    df_debt['ThanhTien'] = pd.to_numeric(df_debt.get('ThanhTien', 0), errors='coerce').fillna(0)
+    df_debt['TienDaTra'] = pd.to_numeric(df_debt['TienDaTra'], errors='coerce').fillna(0)
+    df_debt['TienConLai'] = pd.to_numeric(df_debt['TienConLai'], errors='coerce').fillna(0)
+
     st.markdown("#### Bộ lọc công nợ")
     fc1, fc2, fc3 = st.columns([2, 1, 1])
     customer_filter = fc1.text_input("Lọc theo tên khách", key="debt_filter_name").strip()
 
     valid_dates = df_debt['NgayParsed'].dropna().dt.date
-    tz = pytz.timezone('Asia/Ho_Chi_Minh')
     today = datetime.now(tz).date()
     default_from = valid_dates.min() if not valid_dates.empty else today
     default_to = valid_dates.max() if not valid_dates.empty else today
@@ -460,6 +531,8 @@ def render_debt(df_inv):
             TenKH=('TenKH', 'first'),
             NgayRaw=('NgayRaw', 'first'),
             TongNo=('ThanhTien', 'sum'),
+            DaTra=('TienDaTra', 'sum'),
+            ConNo=('TienConLai', 'sum'),
             TongSoLuong=('SoLuong', 'sum'),
             NgayParsed=('NgayParsed', 'max')
         )
@@ -472,12 +545,14 @@ def render_debt(df_inv):
         if not still_exists:
             st.session_state['debt_selected'] = None
 
-    header1, header2, header3, header4, header5 = st.columns([2.5, 2.5, 2, 2, 1.2])
+    header1, header2, header3, header4, header5, header6, header7 = st.columns([2.2, 2.2, 1.5, 1.5, 1.5, 1.8, 1.0])
     header1.markdown("**Khách hàng**")
     header2.markdown("**Mã phiếu nợ**")
     header3.markdown("**Tổng công nợ**")
-    header4.markdown("**Ngày mua nợ**")
-    header5.markdown("**Tổng SL**")
+    header4.markdown("**Đã trả**")
+    header5.markdown("**Còn thiếu**")
+    header6.markdown("**Ngày mua nợ**")
+    header7.markdown("**SL**")
 
     for idx, row in summary.iterrows():
         customer = str(row['TenKH']).strip()
@@ -488,7 +563,7 @@ def render_debt(df_inv):
         else:
             debt_time_display = debt_time_raw
 
-        c1, c2, c3, c4, c5 = st.columns([2.5, 2.5, 2, 2, 1.2])
+        c1, c2, c3, c4, c5, c6, c7 = st.columns([2.2, 2.2, 1.5, 1.5, 1.5, 1.8, 1.0])
         if c1.button(customer, key=f"debt_customer_{idx}_{debt_id}"):
             st.session_state['debt_selected'] = {
                 'MaPhieuNo': debt_id,
@@ -497,8 +572,10 @@ def render_debt(df_inv):
             }
         c2.code(debt_id)
         c3.write(format_currency(row['TongNo']))
-        c4.write(debt_time_display)
-        c5.write(int(row['TongSoLuong']))
+        c4.write(format_currency(row['DaTra']))
+        c5.write(format_currency(row['ConNo']))
+        c6.write(debt_time_display)
+        c7.write(int(row['TongSoLuong']))
 
     selected = st.session_state.get('debt_selected')
     if selected:
@@ -517,26 +594,63 @@ def render_debt(df_inv):
             else:
                 st.caption(f"Ngày mua nợ: {selected_time}")
 
-            detail_df = selected_rows[['TenSanPham', 'SoLuong', 'ThanhTien']].copy()
+            detail_df = selected_rows[['TenSanPham', 'SoLuong', 'ThanhTien', 'TienDaTra', 'TienConLai']].copy()
             detail_df['SoLuong'] = detail_df['SoLuong'].astype(int)
             detail_df['ThanhTien'] = detail_df['ThanhTien'].apply(format_currency)
-            detail_df.columns = ['Sản phẩm', 'Số lượng', 'Thành tiền']
+            detail_df['TienDaTra'] = detail_df['TienDaTra'].apply(format_currency)
+            detail_df['TienConLai'] = detail_df['TienConLai'].apply(format_currency)
+            detail_df.columns = ['Sản phẩm', 'Số lượng', 'Tổng nợ', 'Đã trả', 'Còn thiếu']
             st.table(detail_df)
 
             total_selected = selected_rows['ThanhTien'].sum()
+            paid_selected = selected_rows['TienDaTra'].sum()
+            remaining_selected = selected_rows['TienConLai'].sum()
+            if remaining_selected <= 0:
+                status_text = "Đã trả"
+            elif paid_selected > 0:
+                status_text = f"Đã trả 1 phần, còn thiếu {format_currency(remaining_selected)}"
+            else:
+                status_text = "Chưa trả"
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Tổng công nợ", format_currency(total_selected))
+            m2.metric("Đã trả", format_currency(paid_selected))
+            m3.metric("Còn thiếu", format_currency(remaining_selected))
+            st.info(f"Trạng thái hiện tại: **{status_text}**")
+
             st.markdown(
-                f"<h4 style='text-align: right; color: #D35400;'>Tổng công nợ đơn này: {format_currency(total_selected)}</h4>",
+                f"<h4 style='text-align: right; color: #D35400;'>Còn thiếu cần thu: {format_currency(remaining_selected)}</h4>",
                 unsafe_allow_html=True
             )
 
+            pay_amount = st.number_input(
+                "Số tiền khách trả lần này (đ)",
+                min_value=0.0,
+                value=float(remaining_selected) if remaining_selected > 0 else 0.0,
+                step=1000.0,
+                format="%.0f",
+                key=f"debt_pay_amount_{selected_debt_id}"
+            )
+
+            if pay_amount > remaining_selected:
+                st.error(f"Số tiền trả vượt quá số còn thiếu ({format_currency(remaining_selected)}).")
+            elif pay_amount == remaining_selected and pay_amount > 0:
+                st.success("Nếu xác nhận, hệ thống sẽ cập nhật trạng thái: Đã trả (đủ 100%).")
+            elif pay_amount > 0:
+                remain_after = remaining_selected - pay_amount
+                st.warning(f"Nếu xác nhận, trạng thái sẽ là: Đã trả 1 phần, còn thiếu {format_currency(remain_after)}.")
+
             c1, c2 = st.columns(2)
-            if c1.button("✅ Đã trả", type="primary", key="debt_mark_paid"):
-                if dm.settle_debt(selected_debt_id, selected_customer, selected_time):
-                    st.success("Đã cập nhật trạng thái thanh toán công nợ.")
-                    st.session_state['debt_selected'] = None
+            can_submit = pay_amount > 0 and pay_amount <= remaining_selected
+            if c1.button("💵 Xác nhận thu tiền", type="primary", key="debt_mark_paid", disabled=not can_submit):
+                result = settle_debt_safe(selected_debt_id, pay_amount, selected_customer, selected_time)
+                if result.get("ok"):
+                    st.success(f"Cập nhật thành công. Trạng thái mới: {result.get('status_text', '')}")
+                    if result.get("remaining", 0) <= 0:
+                        st.session_state['debt_selected'] = None
                     st.rerun()
                 else:
-                    st.error("Không thể cập nhật công nợ. Vui lòng thử lại.")
+                    st.error(result.get("message", "Không thể cập nhật công nợ."))
             if c2.button("Bỏ chọn", key="debt_unselect"):
                 st.session_state['debt_selected'] = None
                 st.rerun()
