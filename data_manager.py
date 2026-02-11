@@ -156,21 +156,22 @@ def load_sales_history():
     if sh:
         try:
             wks = sh.worksheet("LichSuBan")
-            COL_NAMES = [
+            COL_BASE = [
                 'NgayBan', 'MaDonHang', 'MaSanPham', 'TenSanPham', 
                 'DonVi', 'SoLuong', 'GiaBan', 'ThanhTien', 
-                'GiaVonLucBan', 'LoiNhuan', 'HinhThucThanhToan'
+                'GiaVonLucBan', 'LoiNhuan'
             ]
+            PAYMENT_COLS = ['HinhThucThanhToan', 'HinhThucTT']
 
             df = safe_get_data(wks)
             if df.empty:
-                return pd.DataFrame(columns=COL_NAMES)
+                return pd.DataFrame(columns=COL_BASE + PAYMENT_COLS)
 
             df.columns = [str(c).strip() for c in df.columns]
-            for col in COL_NAMES:
+            for col in COL_BASE + PAYMENT_COLS:
                 if col not in df.columns:
                     df[col] = ''
-            df = df[COL_NAMES].copy()
+            df = df[COL_BASE + PAYMENT_COLS].copy()
 
             if 'NgayBan' in df.columns:
                 df['NgayBan'] = _parse_sheet_datetime_series(df['NgayBan'])
@@ -181,8 +182,12 @@ def load_sales_history():
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-            if 'HinhThucThanhToan' in df.columns:
-                df['HinhThucThanhToan'] = df['HinhThucThanhToan'].apply(_normalize_payment_method)
+            # Đồng bộ 2 tên cột hình thức thanh toán để tương thích dữ liệu cũ/mới.
+            payment_primary = df['HinhThucThanhToan'].astype(str).str.strip()
+            payment_fallback = df['HinhThucTT'].astype(str).str.strip()
+            payment_raw = payment_primary.where(payment_primary != '', payment_fallback)
+            df['HinhThucThanhToan'] = payment_raw.apply(_normalize_payment_method)
+            df['HinhThucTT'] = df['HinhThucThanhToan']
             
             return df
         except Exception as e:
@@ -276,7 +281,7 @@ def process_checkout(cart_items, payment_method='Tiền mặt'):
         base_sales_cols = [
             'NgayBan', 'MaDonHang', 'MaSanPham', 'TenSanPham',
             'DonVi', 'SoLuong', 'GiaBan', 'ThanhTien',
-            'GiaVonLucBan', 'LoiNhuan', 'HinhThucThanhToan'
+            'GiaVonLucBan', 'LoiNhuan', 'HinhThucThanhToan', 'HinhThucTT'
         ]
         if not sales_headers:
             sales_headers = base_sales_cols.copy()
@@ -341,6 +346,7 @@ def process_checkout(cart_items, payment_method='Tiền mặt'):
                 sales_row[sales_idx['GiaVonLucBan']] = cost_price_int
                 sales_row[sales_idx['LoiNhuan']] = profit
                 sales_row[sales_idx['HinhThucThanhToan']] = payment_method
+                sales_row[sales_idx['HinhThucTT']] = payment_method
                 sales_rows.append(sales_row)
         
         if sales_rows:
