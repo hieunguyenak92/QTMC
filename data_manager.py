@@ -57,6 +57,8 @@ def _ensure_sheet_column(worksheet, headers, column_name):
 
 def _normalize_id_text(value):
     txt = str(value).strip()
+    if txt.startswith("'"):
+        txt = txt[1:].strip()
     if txt == '' or txt.lower() == 'nan':
         return ''
     txt_l = txt.lower()
@@ -174,7 +176,7 @@ def load_sales_history():
         try:
             wks = sh.worksheet("LichSuBan")
             COL_NAMES = [
-                'NgayBan', 'MaDonHang', 'MaSanPham', 'TenSanPham', 
+                'NgayBan', 'MaHoaDon', 'MaSanPham', 'TenSanPham',
                 'DonVi', 'SoLuong', 'GiaBan', 'ThanhTien', 
                 'GiaVonLucBan', 'LoiNhuan', 'HinhThucTT'
             ]
@@ -198,6 +200,7 @@ def load_sales_history():
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
+            df['MaHoaDon'] = df['MaHoaDon'].apply(_normalize_id_text)
             df['HinhThucTT'] = df['HinhThucTT'].astype(str).str.strip().apply(_normalize_payment_method)
             
             return df
@@ -289,16 +292,17 @@ def process_checkout(cart_items, payment_method='Tiền mặt'):
         ws_inventory = sh.worksheet("TonKho")
         ws_sales = sh.worksheet("LichSuBan")
         sales_headers = _get_sheet_headers(ws_sales)
-        base_sales_cols = [
-            'NgayBan', 'MaDonHang', 'MaSanPham', 'TenSanPham',
+        required_cols = [
+            'NgayBan', 'MaHoaDon', 'MaSanPham', 'TenSanPham',
             'DonVi', 'SoLuong', 'GiaBan', 'ThanhTien',
             'GiaVonLucBan', 'LoiNhuan', 'HinhThucTT'
         ]
         if not sales_headers:
-            sales_headers = base_sales_cols.copy()
+            sales_headers = ['NgayBan', 'MaHoaDon', 'MaSanPham', 'TenSanPham', 'DonVi', 'SoLuong', 'GiaBan', 'ThanhTien', 'GiaVonLucBan', 'LoiNhuan', 'HinhThucTT']
             for col_idx, col_name in enumerate(sales_headers, start=1):
                 ws_sales.update_cell(1, col_idx, col_name)
-        for col_name in base_sales_cols:
+
+        for col_name in required_cols:
             sales_headers = _ensure_sheet_column(ws_sales, sales_headers, col_name)
         sales_idx = {name: idx for idx, name in enumerate(sales_headers)}
         if 'HinhThucTT' not in sales_idx:
@@ -350,7 +354,7 @@ def process_checkout(cart_items, payment_method='Tiền mặt'):
                 
                 sales_row = [''] * len(sales_headers)
                 sales_row[sales_idx['NgayBan']] = timestamp
-                sales_row[sales_idx['MaDonHang']] = order_id
+                sales_row[sales_idx['MaHoaDon']] = order_id
                 sales_row[sales_idx['MaSanPham']] = ma_sp
                 sales_row[sales_idx['TenSanPham']] = item['TenSanPham']
                 sales_row[sales_idx['DonVi']] = item['DonVi']
@@ -618,17 +622,19 @@ def process_return(order_id, product_id, qty_return):
 
         headers = [str(h).strip() for h in records[0]]
         idx_map = {name: i for i, name in enumerate(headers)}
-        idx_order = idx_map.get('MaDonHang', 1)
+        idx_order = idx_map.get('MaHoaDon', 1)
         idx_product = idx_map.get('MaSanPham', 2)
 
         target_order = _normalize_id_text(order_id)
+        if target_order == '':
+            return False
         target_product = str(product_id).strip()
         row_to_delete = None
         for i in range(1, len(records)):
             row = records[i]
             order_val = _normalize_id_text(row[idx_order]) if idx_order < len(row) else ''
             product_val = str(row[idx_product]).strip() if idx_product < len(row) else ''
-            if order_val == target_order and product_val == target_product:
+            if target_order == order_val and product_val == target_product:
                 row_to_delete = i + 1  # Row index in sheet (1-based)
                 break
 
