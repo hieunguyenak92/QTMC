@@ -543,7 +543,7 @@ def render_debt(df_inv):
 
 # --- 4. MAN HINH NHAP HANG ---
 def render_import(df_inv):
-    st.subheader("📦 Nhập Kho")
+    st.subheader("📦 Nhập Tồn Kho")
     tab1, tab2 = st.tabs(["Nhập thêm hàng cũ", "Thêm sản phẩm mới hoàn toàn"])
     
     with tab1:
@@ -644,13 +644,13 @@ def render_import(df_inv):
 
     if st.session_state['import_cart']:
         st.divider()
-        st.write("### Danh sách chờ nhập kho")
+        st.write("### Danh sách chờ nhập tồn kho")
         df_imp = pd.DataFrame(st.session_state['import_cart'])
         st.table(df_imp)
         if st.button("💾 LƯU TẤT CẢ VÀO KHO", type="primary"):
             if dm.process_import(st.session_state['import_cart']):
                 st.session_state['import_cart'] = []
-                st.success("Đã nhập kho thành công!")
+                st.success("Đã nhập tồn kho thành công!")
                 st.rerun()
 
 # --- 5. MAN HINH BAO CAO ---
