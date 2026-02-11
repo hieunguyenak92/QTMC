@@ -91,6 +91,62 @@ def settle_debt_safe(debt_id, payment_amount, customer_name=None, debt_time_raw=
         return {"ok": False, "message": "Không thể cập nhật công nợ."}
     return {"ok": False, "message": "Kết quả cập nhật công nợ không hợp lệ."}
 
+def load_debt_records_safe():
+    fn = getattr(dm, "load_debt_records", None)
+    if callable(fn):
+        try:
+            df = fn()
+            if isinstance(df, pd.DataFrame):
+                return df
+        except Exception as e:
+            st.warning(f"Lỗi khi tải công nợ từ data_manager: {e}")
+
+    # Fallback cho trường hợp bản data_manager trên môi trường deploy còn cũ.
+    get_conn = getattr(dm, "get_connection", None)
+    if not callable(get_conn):
+        st.error("Thiếu hàm `load_debt_records` và không có fallback kết nối DB trong `data_manager.py`.")
+        return pd.DataFrame()
+
+    sh = get_conn()
+    if not sh:
+        return pd.DataFrame()
+
+    try:
+        wks = sh.worksheet("CongNo")
+    except Exception as e:
+        st.error(f"Không mở được sheet CongNo: {e}")
+        return pd.DataFrame()
+
+    safe_get = getattr(dm, "safe_get_data", None)
+    try:
+        if callable(safe_get):
+            df = safe_get(wks)
+        else:
+            raw = wks.get_all_values()
+            if not raw:
+                return pd.DataFrame()
+            headers = raw[0]
+            rows = raw[1:]
+            df = pd.DataFrame(rows, columns=headers if headers else None)
+    except Exception as e:
+        st.error(f"Lỗi fallback tải CongNo: {e}")
+        return pd.DataFrame()
+
+    if df.empty:
+        return df
+
+    # Chuẩn hóa tối thiểu để render_debt chạy ổn với mọi phiên bản.
+    for col in ['TenKH', 'Ngay', 'TenSanPham', 'SoLuong', 'ThanhTien']:
+        if col not in df.columns:
+            df[col] = ''
+    if 'MaPhieuNo' not in df.columns:
+        df['MaPhieuNo'] = ''
+    if 'TienDaTra' not in df.columns:
+        df['TienDaTra'] = 0
+    if 'TienConLai' not in df.columns:
+        df['TienConLai'] = ''
+    return df
+
 # --- RENDER HEADER ---
 def render_header():
     c1, c2 = st.columns([1, 8])
@@ -497,7 +553,7 @@ def render_debt(df_inv):
 
     st.divider()
     st.subheader("📋 Danh Sách Khách Công Nợ")
-    df_debt = dm.load_debt_records()
+    df_debt = load_debt_records_safe()
 
     if df_debt.empty:
         st.info("Hiện chưa có công nợ nào.")
