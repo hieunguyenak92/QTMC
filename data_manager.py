@@ -205,7 +205,7 @@ def load_debt_records():
             df = safe_get_data(wks)
 
             if df.empty:
-                return pd.DataFrame(columns=COL_NAMES + ['MaPhieuNo', 'NgayRaw', 'NgayParsed'])
+                return pd.DataFrame(columns=COL_NAMES + ['MaPhieuNo', 'TienDaTra', 'TienConLai', 'NgayRaw', 'NgayParsed'])
 
             df.columns = [str(c).strip() for c in df.columns]
             for col in COL_NAMES:
@@ -213,8 +213,13 @@ def load_debt_records():
                     df[col] = ''
             if 'MaPhieuNo' not in df.columns:
                 df['MaPhieuNo'] = ''
+            if 'TienDaTra' not in df.columns:
+                df['TienDaTra'] = 0
+            if 'TienConLai' not in df.columns:
+                df['TienConLai'] = ''
 
-            df = df[COL_NAMES + ['MaPhieuNo'] + [c for c in df.columns if c not in COL_NAMES + ['MaPhieuNo']]]
+            first_cols = COL_NAMES + ['MaPhieuNo', 'TienDaTra', 'TienConLai']
+            df = df[first_cols + [c for c in df.columns if c not in first_cols]]
             df['TenKH'] = df['TenKH'].astype(str).str.strip()
             df['TenSanPham'] = df['TenSanPham'].astype(str).str.strip()
             df['NgayRaw'] = df['Ngay'].astype(str).str.strip()
@@ -222,6 +227,7 @@ def load_debt_records():
             df['SoLuong'] = pd.to_numeric(df['SoLuong'], errors='coerce').fillna(0)
             df['ThanhTien'] = pd.to_numeric(df['ThanhTien'], errors='coerce').fillna(0)
             df['MaPhieuNo'] = df['MaPhieuNo'].astype(str).str.strip()
+            df['TienDaTra'] = pd.to_numeric(df['TienDaTra'], errors='coerce').fillna(0)
 
             legacy_fallback = (
                 "LEGACY|"
@@ -231,17 +237,36 @@ def load_debt_records():
             )
             df.loc[df['MaPhieuNo'] == '', 'MaPhieuNo'] = legacy_fallback[df['MaPhieuNo'] == '']
 
-            # Nếu sheet có cột trạng thái, chỉ lấy công nợ chưa thanh toán.
             if 'TrangThai' in df.columns:
-                unpaid_mask = ~df['TrangThai'].astype(str).str.strip().str.lower().isin(['datra', 'da tra', 'paid'])
-                df = df[unpaid_mask]
+                status_norm = df['TrangThai'].astype(str).str.strip().str.lower()
+                paid_status_mask = status_norm.isin(['datra', 'da tra', 'paid'])
+                no_paid_record_mask = (df['TienDaTra'] <= 0) & paid_status_mask
+                df.loc[no_paid_record_mask, 'TienDaTra'] = df.loc[no_paid_record_mask, 'ThanhTien']
+
+            raw_remaining = pd.to_numeric(df['TienConLai'], errors='coerce')
+            calc_remaining = (df['ThanhTien'] - df['TienDaTra']).clip(lower=0)
+            df['TienConLai'] = raw_remaining.fillna(calc_remaining)
+            df['TienConLai'] = df['TienConLai'].clip(lower=0)
+
+            # Chỉ giữ các phiếu còn dư nợ (>0), nhưng giữ toàn bộ dòng của phiếu đó để xem chi tiết.
+            open_debt_ids = (
+                df.groupby('MaPhieuNo', as_index=False)['TienConLai']
+                .sum()
+                .query('TienConLai > 0')['MaPhieuNo']
+                .astype(str)
+                .tolist()
+            )
+            if open_debt_ids:
+                df = df[df['MaPhieuNo'].astype(str).isin(open_debt_ids)]
+            else:
+                df = df.iloc[0:0]
 
             df = df[(df['TenKH'] != '') & (df['TenSanPham'] != '')]
             return df.reset_index(drop=True)
         except Exception as e:
             st.warning(f"Lỗi tải công nợ: {e}")
-            return pd.DataFrame(columns=COL_NAMES + ['MaPhieuNo', 'NgayRaw', 'NgayParsed'])
-    return pd.DataFrame(columns=COL_NAMES + ['MaPhieuNo', 'NgayRaw', 'NgayParsed'])
+            return pd.DataFrame(columns=COL_NAMES + ['MaPhieuNo', 'TienDaTra', 'TienConLai', 'NgayRaw', 'NgayParsed'])
+    return pd.DataFrame(columns=COL_NAMES + ['MaPhieuNo', 'TienDaTra', 'TienConLai', 'NgayRaw', 'NgayParsed'])
 
 # --- 3. XU LY BAN HANG (FIX: không clean giá từ cart vì đã là float) ---
 def process_checkout(cart_items):
@@ -318,7 +343,7 @@ def process_checkout(cart_items):
     return False
 
 # --- 3b. XU LY BAN NO (CONG NO) ---
-def process_debt_checkout(customer_name, cart_items):
+def process_debt_checkout(customer_name, cart_items, debt_datetime=None):
     sh = get_connection()
     if not sh:
         return False
@@ -340,7 +365,7 @@ def process_debt_checkout(customer_name, cart_items):
             for col_idx, col_name in enumerate(debt_headers, start=1):
                 ws_debt.update_cell(1, col_idx, col_name)
 
-        for col_name in ['TenKH', 'Ngay', 'TenSanPham', 'SoLuong', 'ThanhTien', 'MaPhieuNo']:
+        for col_name in ['TenKH', 'Ngay', 'TenSanPham', 'SoLuong', 'ThanhTien', 'MaPhieuNo', 'TrangThai', 'TienDaTra', 'TienConLai']:
             debt_headers = _ensure_sheet_column(ws_debt, debt_headers, col_name)
 
         header_idx = {name: idx for idx, name in enumerate(debt_headers)}
@@ -393,7 +418,22 @@ def process_debt_checkout(customer_name, cart_items):
             debt_rows.append([ten_sp, qty_sell, sale_price_int * qty_sell])
 
         tz = pytz.timezone('Asia/Ho_Chi_Minh')
-        timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        if debt_datetime is None:
+            debt_dt = datetime.now(tz)
+        else:
+            if hasattr(debt_datetime, "year") and hasattr(debt_datetime, "hour"):
+                debt_dt = debt_datetime
+            else:
+                debt_dt = pd.to_datetime(debt_datetime, errors='coerce')
+            if pd.isna(debt_dt):
+                st.error("Ngày mua nợ không hợp lệ.")
+                return False
+            if debt_dt.tzinfo is None:
+                debt_dt = tz.localize(debt_dt)
+            else:
+                debt_dt = debt_dt.astimezone(tz)
+
+        timestamp = debt_dt.strftime("%Y-%m-%d %H:%M:%S")
         debt_id = datetime.now(tz).strftime("CN%Y%m%d%H%M%S%f")[:-3]
 
         for row_idx, new_qty in inventory_updates:
@@ -408,8 +448,9 @@ def process_debt_checkout(customer_name, cart_items):
             debt_row[header_idx['SoLuong']] = qty_sell
             debt_row[header_idx['ThanhTien']] = thanh_tien
             debt_row[header_idx['MaPhieuNo']] = debt_id
-            if 'TrangThai' in header_idx:
-                debt_row[header_idx['TrangThai']] = 'ChuaTra'
+            debt_row[header_idx['TrangThai']] = 'ChuaTra'
+            debt_row[header_idx['TienDaTra']] = 0
+            debt_row[header_idx['TienConLai']] = thanh_tien
             rows_to_append.append(debt_row)
 
         ws_debt.append_rows(rows_to_append)
@@ -548,19 +589,32 @@ def process_return(order_id, product_id, qty_return):
         return False
 
 # --- 6. XU LY THANH TOAN CONG NO ---
-def settle_debt(debt_id, customer_name=None, debt_time_raw=None):
+def settle_debt(debt_id, payment_amount, customer_name=None, debt_time_raw=None):
     sh = get_connection()
     if not sh:
-        return False
+        return {"ok": False, "message": "Không kết nối được Google Sheet."}
 
     debt_id = str(debt_id).strip()
     customer_name = str(customer_name).strip()
     debt_time_raw = str(debt_time_raw).strip()
     if not debt_id and (not customer_name or not debt_time_raw):
-        return False
+        return {"ok": False, "message": "Thiếu thông tin phiếu công nợ."}
+
+    try:
+        pay_now = int(round(float(payment_amount)))
+    except Exception:
+        return {"ok": False, "message": "Số tiền khách trả không hợp lệ."}
+    if pay_now <= 0:
+        return {"ok": False, "message": "Số tiền khách trả phải lớn hơn 0."}
 
     try:
         ws_debt = sh.worksheet("CongNo")
+        headers = _get_sheet_headers(ws_debt)
+        if not headers:
+            return {"ok": False, "message": "Sheet CongNo chưa có dữ liệu hợp lệ."}
+        for col_name in ['MaPhieuNo', 'TrangThai', 'TienDaTra', 'TienConLai', 'TenKH', 'Ngay', 'ThanhTien']:
+            headers = _ensure_sheet_column(ws_debt, headers, col_name)
+
         try:
             records = ws_debt.get("A:Z", value_render_option='UNFORMATTED_VALUE')
         except Exception:
@@ -569,18 +623,21 @@ def settle_debt(debt_id, customer_name=None, debt_time_raw=None):
             except Exception:
                 records = ws_debt.get_all_values()
         if len(records) < 2:
-            return False
+            return {"ok": False, "message": "Không tìm thấy dữ liệu công nợ."}
 
-        headers = [str(h).strip() for h in records[0]]
-        idx_customer = headers.index('TenKH') if 'TenKH' in headers else 0
-        idx_time = headers.index('Ngay') if 'Ngay' in headers else 1
-        idx_debt = headers.index('MaPhieuNo') if 'MaPhieuNo' in headers else -1
-        idx_status = headers.index('TrangThai') if 'TrangThai' in headers else -1
+        idx_map = {name: i for i, name in enumerate(headers)}
+        idx_customer = idx_map['TenKH']
+        idx_time = idx_map['Ngay']
+        idx_debt = idx_map['MaPhieuNo']
+        idx_status = idx_map['TrangThai']
+        idx_total = idx_map['ThanhTien']
+        idx_paid = idx_map['TienDaTra']
+        idx_remaining = idx_map['TienConLai']
 
         matched_rows = []
         for i in range(1, len(records)):
             row = records[i]
-            record_debt_id = str(row[idx_debt]).strip() if idx_debt >= 0 and idx_debt < len(row) else ''
+            record_debt_id = str(row[idx_debt]).strip() if idx_debt < len(row) else ''
             ten_kh = str(row[idx_customer]).strip() if idx_customer < len(row) else ''
             record_time = str(row[idx_time]).strip() if idx_time < len(row) else ''
 
@@ -591,21 +648,82 @@ def settle_debt(debt_id, customer_name=None, debt_time_raw=None):
                 is_match = (ten_kh == customer_name and record_time == debt_time_raw)
 
             if is_match:
-                matched_rows.append(i + 1)  # Sheet row index
+                try:
+                    row_total = float(row[idx_total]) if idx_total < len(row) and str(row[idx_total]).strip() != '' else 0.0
+                except Exception:
+                    row_total = 0.0
+                try:
+                    row_paid = float(row[idx_paid]) if idx_paid < len(row) and str(row[idx_paid]).strip() != '' else 0.0
+                except Exception:
+                    row_paid = 0.0
+                row_paid = max(0.0, min(row_paid, row_total))
+                row_remain = max(0.0, row_total - row_paid)
+
+                matched_rows.append({
+                    'sheet_row': i + 1,
+                    'row_total': row_total,
+                    'row_paid': row_paid,
+                    'row_remain': row_remain,
+                })
 
         if not matched_rows:
-            return False
+            return {"ok": False, "message": "Không tìm thấy phiếu công nợ cần cập nhật."}
 
-        if idx_status >= 0:
-            for sheet_row in matched_rows:
-                ws_debt.update_cell(sheet_row, idx_status + 1, 'DaTra')
+        total_debt = sum(x['row_total'] for x in matched_rows)
+        total_paid_before = sum(x['row_paid'] for x in matched_rows)
+        total_remaining_before = sum(x['row_remain'] for x in matched_rows)
+
+        if total_remaining_before <= 0:
+            return {"ok": False, "message": "Phiếu này đã thanh toán đủ."}
+        if pay_now > total_remaining_before:
+            return {
+                "ok": False,
+                "message": f"Số tiền trả vượt quá số còn nợ ({int(total_remaining_before):,} đ).".replace(',', '.')
+            }
+
+        remaining_to_allocate = float(pay_now)
+        for row_info in matched_rows:
+            if remaining_to_allocate <= 0:
+                break
+
+            take = min(row_info['row_remain'], remaining_to_allocate)
+            row_info['row_paid'] = row_info['row_paid'] + take
+            row_info['row_remain'] = max(0.0, row_info['row_total'] - row_info['row_paid'])
+            remaining_to_allocate -= take
+
+        for row_info in matched_rows:
+            if row_info['row_remain'] <= 0:
+                row_status = 'DaTra'
+            elif row_info['row_paid'] > 0:
+                row_status = 'DaTra1Phan'
+            else:
+                row_status = 'ChuaTra'
+
+            ws_debt.update_cell(row_info['sheet_row'], idx_paid + 1, int(round(row_info['row_paid'])))
+            ws_debt.update_cell(row_info['sheet_row'], idx_remaining + 1, int(round(row_info['row_remain'])))
+            ws_debt.update_cell(row_info['sheet_row'], idx_status + 1, row_status)
+
+        total_paid_after = sum(x['row_paid'] for x in matched_rows)
+        total_remaining_after = max(0.0, total_debt - total_paid_after)
+
+        if total_remaining_after <= 0:
+            status_text = "Đã trả"
         else:
-            # Xóa từ dưới lên để không lệch index.
-            for sheet_row in sorted(matched_rows, reverse=True):
-                ws_debt.delete_rows(sheet_row)
+            status_text = (
+                "Đã trả 1 phần, còn thiếu "
+                + f"{int(round(total_remaining_after)):,} đ".replace(',', '.')
+            )
 
         st.cache_data.clear()
-        return True
+        return {
+            "ok": True,
+            "status_text": status_text,
+            "total_debt": int(round(total_debt)),
+            "paid_before": int(round(total_paid_before)),
+            "paid_now": int(round(pay_now)),
+            "paid_after": int(round(total_paid_after)),
+            "remaining": int(round(total_remaining_after)),
+        }
     except Exception as e:
         st.error(f"Lỗi cập nhật công nợ: {e}")
-        return False
+        return {"ok": False, "message": f"Lỗi cập nhật công nợ: {e}"}
