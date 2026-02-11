@@ -58,17 +58,40 @@ def process_checkout_safe(cart_items, payment_method):
         st.error("Thiếu hàm `process_checkout` trong `data_manager.py`.")
         return False
 
+    payment_method = str(payment_method).strip() or "Tiền mặt"
+
     try:
         sig = inspect.signature(fn)
-        if 'payment_method' not in sig.parameters:
-            st.error(
-                "Bản `data_manager.py` đang chạy chưa hỗ trợ lưu hình thức thanh toán. "
-                "Vui lòng deploy đồng bộ `main.py` + `data_manager.py` mới nhất."
-            )
+    except Exception:
+        sig = None
+
+    # Ưu tiên gọi bản mới có tham số payment_method để ghi cột HinhThucTT.
+    if sig is not None and 'payment_method' in sig.parameters:
+        try:
+            return fn(cart_items, payment_method)
+        except TypeError:
+            pass
+        except Exception as e:
+            st.error(f"Lỗi gọi `process_checkout`: {e}")
             return False
+
+    # Fallback tương thích bản cũ để không chặn thanh toán.
+    try:
         return fn(cart_items, payment_method)
     except TypeError:
-        st.error("Lỗi gọi `process_checkout`: chữ ký hàm không đúng bản mới.")
+        try:
+            result = fn(cart_items)
+            if result:
+                st.warning(
+                    "Đã thanh toán nhưng bản `data_manager.py` đang chạy chưa ghi cột `HinhThucTT`. "
+                    "Vui lòng restart/deploy lại đúng bản mới để lưu hình thức thanh toán."
+                )
+            return result
+        except Exception as e:
+            st.error(f"Lỗi gọi `process_checkout`: {e}")
+            return False
+    except Exception as e:
+        st.error(f"Lỗi gọi `process_checkout`: {e}")
         return False
 
 def process_debt_checkout_safe(customer_name, cart_items, debt_datetime):
