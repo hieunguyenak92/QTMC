@@ -372,13 +372,9 @@ def render_sales(df_inv):
         df_day = df_sales[(df_sales['NgayBan'].dt.date == selected_date) & (df_sales['SoLuong'] > 0)]
         if not df_day.empty:
             df_day = df_day.copy()
-            payment_main = df_day['HinhThucThanhToan'] if 'HinhThucThanhToan' in df_day.columns else ''
-            payment_alt = df_day['HinhThucTT'] if 'HinhThucTT' in df_day.columns else ''
-            payment_main = pd.Series(payment_main, index=df_day.index).fillna('').astype(str).str.strip()
-            payment_alt = pd.Series(payment_alt, index=df_day.index).fillna('').astype(str).str.strip()
-            df_day['HinhThucThanhToan'] = payment_main.where(payment_main != '', payment_alt)
-
-            payment_norm = df_day['HinhThucThanhToan'].str.lower()
+            payment_values = df_day['HinhThucTT'] if 'HinhThucTT' in df_day.columns else ''
+            payment_values = pd.Series(payment_values, index=df_day.index).fillna('').astype(str).str.strip()
+            payment_norm = payment_values.str.lower()
             is_transfer = (
                 payment_norm.str.contains('chuy')
                 | payment_norm.str.contains('khoan')
