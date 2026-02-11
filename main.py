@@ -44,11 +44,27 @@ if 'debt_cart' not in st.session_state:
     st.session_state['debt_cart'] = []
 if 'debt_selected' not in st.session_state:
     st.session_state['debt_selected'] = None
+if 'sales_payment_method' not in st.session_state:
+    st.session_state['sales_payment_method'] = "Tiền mặt"
 
 # --- HAM HO TRO ---
 def format_currency(amount):
     # VN style: dot nghìn, no decimal
     return f"{amount:,.0f} đ".replace(',', '.')
+
+def process_checkout_safe(cart_items, payment_method):
+    fn = getattr(dm, "process_checkout", None)
+    if not callable(fn):
+        st.error("Thiếu hàm `process_checkout` trong `data_manager.py`.")
+        return False
+
+    try:
+        sig = inspect.signature(fn)
+        if 'payment_method' in sig.parameters:
+            return fn(cart_items, payment_method)
+        return fn(cart_items)
+    except TypeError:
+        return fn(cart_items)
 
 def process_debt_checkout_safe(customer_name, cart_items, debt_datetime):
     fn = getattr(dm, "process_debt_checkout", None)
@@ -302,16 +318,23 @@ def render_sales(df_inv):
                 total_bill += item_total
             
             st.markdown(f"<h3 style='text-align: right; color: red;'>Tổng cộng: {format_currency(total_bill)}</h3>", unsafe_allow_html=True)
+
+            payment_method = st.radio(
+                "Hình thức thanh toán",
+                ["Tiền mặt", "Chuyển khoản"],
+                horizontal=True,
+                key="sales_payment_method"
+            )
             
             c1, c2 = st.columns(2)
             if c1.button("🗑 Xóa toàn bộ giỏ"):
                 st.session_state['sales_cart'] = []
                 st.rerun()
             if c2.button("✅ THANH TOÁN", type="primary"):
-                if dm.process_checkout(st.session_state['sales_cart']):
+                if process_checkout_safe(st.session_state['sales_cart'], payment_method):
                     st.session_state['sales_cart'] = []
                     st.balloons()
-                    st.success("Thanh toán thành công!")
+                    st.success(f"Thanh toán thành công ({payment_method})!")
                     st.rerun()
         else:
             st.caption("Chưa có hàng trong giỏ.")
@@ -343,6 +366,22 @@ def render_sales(df_inv):
 
         df_day = df_sales[(df_sales['NgayBan'].dt.date == selected_date) & (df_sales['SoLuong'] > 0)]
         if not df_day.empty:
+            df_day = df_day.copy()
+            if 'HinhThucThanhToan' not in df_day.columns:
+                df_day['HinhThucThanhToan'] = 'Tiền mặt'
+            df_day['HinhThucThanhToan'] = df_day['HinhThucThanhToan'].fillna('').astype(str).str.strip()
+            payment_norm = df_day['HinhThucThanhToan'].str.lower()
+            is_transfer = payment_norm.str.contains('chuy') | payment_norm.str.contains('khoan') | payment_norm.str.contains('bank')
+
+            total_day = df_day['ThanhTien'].sum()
+            transfer_day = df_day.loc[is_transfer, 'ThanhTien'].sum()
+            cash_day = total_day - transfer_day
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Tổng bán trong ngày", format_currency(total_day))
+            m2.metric("Chuyển khoản", format_currency(transfer_day))
+            m3.metric("Tiền mặt", format_currency(cash_day))
+
             df_summary = df_day.groupby(['MaSanPham', 'TenSanPham']).agg({
                 'SoLuong': 'sum',
                 'ThanhTien': 'sum',
