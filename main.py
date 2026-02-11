@@ -60,11 +60,16 @@ def process_checkout_safe(cart_items, payment_method):
 
     try:
         sig = inspect.signature(fn)
-        if 'payment_method' in sig.parameters:
-            return fn(cart_items, payment_method)
-        return fn(cart_items)
+        if 'payment_method' not in sig.parameters:
+            st.error(
+                "Bản `data_manager.py` đang chạy chưa hỗ trợ lưu hình thức thanh toán. "
+                "Vui lòng deploy đồng bộ `main.py` + `data_manager.py` mới nhất."
+            )
+            return False
+        return fn(cart_items, payment_method)
     except TypeError:
-        return fn(cart_items)
+        st.error("Lỗi gọi `process_checkout`: chữ ký hàm không đúng bản mới.")
+        return False
 
 def process_debt_checkout_safe(customer_name, cart_items, debt_datetime):
     fn = getattr(dm, "process_debt_checkout", None)
