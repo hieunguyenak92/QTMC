@@ -36,6 +36,12 @@ def _parse_sheet_datetime_series(series):
         )
     return parsed
 
+def _normalize_payment_method(value):
+    txt = str(value).strip().lower()
+    if 'chuy' in txt or 'khoan' in txt or 'bank' in txt or 'ck' == txt:
+        return 'Chuyển khoản'
+    return 'Tiền mặt'
+
 def _get_sheet_headers(worksheet):
     try:
         headers = worksheet.row_values(1)
@@ -150,43 +156,33 @@ def load_sales_history():
     if sh:
         try:
             wks = sh.worksheet("LichSuBan")
-            try:
-                data = wks.get("A:J", value_render_option='UNFORMATTED_VALUE')
-            except Exception:
-                try:
-                    data = wks.get_all_values(value_render_option='UNFORMATTED_VALUE')
-                except Exception:
-                    data = wks.get_all_values()
-            
             COL_NAMES = [
                 'NgayBan', 'MaDonHang', 'MaSanPham', 'TenSanPham', 
                 'DonVi', 'SoLuong', 'GiaBan', 'ThanhTien', 
-                'GiaVonLucBan', 'LoiNhuan'
+                'GiaVonLucBan', 'LoiNhuan', 'HinhThucThanhToan'
             ]
-            
-            if len(data) < 2:
+
+            df = safe_get_data(wks)
+            if df.empty:
                 return pd.DataFrame(columns=COL_NAMES)
 
-            rows = data[1:]
-            
-            normalized_rows = []
-            for row in rows:
-                if len(row) < len(COL_NAMES):
-                    row += [''] * (len(COL_NAMES) - len(row))
-                elif len(row) > len(COL_NAMES):
-                    row = row[:len(COL_NAMES)]
-                normalized_rows.append(row)
-            
-            df = pd.DataFrame(normalized_rows, columns=COL_NAMES)
+            df.columns = [str(c).strip() for c in df.columns]
+            for col in COL_NAMES:
+                if col not in df.columns:
+                    df[col] = ''
+            df = df[COL_NAMES].copy()
 
             if 'NgayBan' in df.columns:
-                df['NgayBan'] = pd.to_datetime(df['NgayBan'], errors='coerce')
+                df['NgayBan'] = _parse_sheet_datetime_series(df['NgayBan'])
                 
             # Không dùng clean_to_float; dùng to_numeric tối thiểu để tránh lỗi tính toán
             numeric_cols = ['SoLuong', 'GiaBan', 'ThanhTien', 'GiaVonLucBan', 'LoiNhuan']
             for col in numeric_cols:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+            if 'HinhThucThanhToan' in df.columns:
+                df['HinhThucThanhToan'] = df['HinhThucThanhToan'].apply(_normalize_payment_method)
             
             return df
         except Exception as e:
@@ -269,13 +265,27 @@ def load_debt_records():
     return pd.DataFrame(columns=COL_NAMES + ['MaPhieuNo', 'TienDaTra', 'TienConLai', 'NgayRaw', 'NgayParsed'])
 
 # --- 3. XU LY BAN HANG (FIX: không clean giá từ cart vì đã là float) ---
-def process_checkout(cart_items):
+def process_checkout(cart_items, payment_method='Tiền mặt'):
     sh = get_connection()
     if not sh: return False
     
     try:
         ws_inventory = sh.worksheet("TonKho")
         ws_sales = sh.worksheet("LichSuBan")
+        sales_headers = _get_sheet_headers(ws_sales)
+        base_sales_cols = [
+            'NgayBan', 'MaDonHang', 'MaSanPham', 'TenSanPham',
+            'DonVi', 'SoLuong', 'GiaBan', 'ThanhTien',
+            'GiaVonLucBan', 'LoiNhuan', 'HinhThucThanhToan'
+        ]
+        if not sales_headers:
+            sales_headers = base_sales_cols.copy()
+            for col_idx, col_name in enumerate(sales_headers, start=1):
+                ws_sales.update_cell(1, col_idx, col_name)
+        for col_name in base_sales_cols:
+            sales_headers = _ensure_sheet_column(ws_sales, sales_headers, col_name)
+        sales_idx = {name: idx for idx, name in enumerate(sales_headers)}
+        payment_method = _normalize_payment_method(payment_method)
         
         # Dùng cùng nguồn với UI để đảm bảo số đã được parse ổn định
         df_inv = load_inventory()
@@ -319,18 +329,19 @@ def process_checkout(cart_items):
                 revenue = gia_ban_int * qty_sell
                 profit = (gia_ban_int - cost_price_int) * qty_sell
                 
-                sales_rows.append([
-                    timestamp,
-                    order_id,
-                    ma_sp,
-                    item['TenSanPham'],
-                    item['DonVi'],
-                    qty_sell,
-                    gia_ban_int,
-                    revenue,
-                    cost_price_int,
-                    profit
-                ])
+                sales_row = [''] * len(sales_headers)
+                sales_row[sales_idx['NgayBan']] = timestamp
+                sales_row[sales_idx['MaDonHang']] = order_id
+                sales_row[sales_idx['MaSanPham']] = ma_sp
+                sales_row[sales_idx['TenSanPham']] = item['TenSanPham']
+                sales_row[sales_idx['DonVi']] = item['DonVi']
+                sales_row[sales_idx['SoLuong']] = qty_sell
+                sales_row[sales_idx['GiaBan']] = gia_ban_int
+                sales_row[sales_idx['ThanhTien']] = revenue
+                sales_row[sales_idx['GiaVonLucBan']] = cost_price_int
+                sales_row[sales_idx['LoiNhuan']] = profit
+                sales_row[sales_idx['HinhThucThanhToan']] = payment_method
+                sales_rows.append(sales_row)
         
         if sales_rows:
             ws_sales.append_rows(sales_rows)
