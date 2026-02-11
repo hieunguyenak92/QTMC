@@ -93,11 +93,14 @@ def get_connection():
 def safe_get_data(worksheet):
     try:
         try:
-            # Lấy giá trị thô (không theo định dạng hiển thị) để tránh lỗi dấu phân cách
-            data = worksheet.get("A:Z", value_render_option='UNFORMATTED_VALUE')
+            # Ưu tiên đọc toàn bộ cột để không bỏ sót các cột nằm ngoài A:Z (vd: AA, AB...)
+            data = worksheet.get_all_values(value_render_option='UNFORMATTED_VALUE')
+        except TypeError:
+            # Fallback nếu version gspread cũ chưa hỗ trợ value_render_option cho get_all_values
+            data = worksheet.get_all_values()
         except Exception:
             try:
-                data = worksheet.get_all_values(value_render_option='UNFORMATTED_VALUE')
+                data = worksheet.get("A:ZZ", value_render_option='UNFORMATTED_VALUE')
             except Exception:
                 # Fallback nếu version gspread cũ
                 data = worksheet.get_all_values()
@@ -284,6 +287,9 @@ def process_checkout(cart_items, payment_method='Tiền mặt'):
         for col_name in base_sales_cols:
             sales_headers = _ensure_sheet_column(ws_sales, sales_headers, col_name)
         sales_idx = {name: idx for idx, name in enumerate(sales_headers)}
+        if 'HinhThucTT' not in sales_idx:
+            st.error("Sheet LichSuBan thiếu cột HinhThucTT.")
+            return False
         payment_method = _normalize_payment_method(payment_method)
         
         # Dùng cùng nguồn với UI để đảm bảo số đã được parse ổn định
@@ -343,7 +349,29 @@ def process_checkout(cart_items, payment_method='Tiền mặt'):
                 sales_rows.append(sales_row)
         
         if sales_rows:
-            ws_sales.append_rows(sales_rows)
+            # Ghi theo range cố định để đảm bảo không bị hụt cột HinhThucTT khi append.
+            existing_rows = ws_sales.get_all_values()
+            start_row = len(existing_rows) + 1
+            end_row = start_row + len(sales_rows) - 1
+            end_col = len(sales_headers)
+            start_cell = gspread.utils.rowcol_to_a1(start_row, 1)
+            end_cell = gspread.utils.rowcol_to_a1(end_row, end_col)
+            ws_sales.update(
+                f"{start_cell}:{end_cell}",
+                sales_rows,
+                value_input_option='USER_ENTERED'
+            )
+
+            # Ép ghi lại cột HinhThucTT để chắc chắn luôn có giá trị thanh toán.
+            pay_col = sales_idx['HinhThucTT'] + 1
+            pay_values = [[payment_method] for _ in sales_rows]
+            pay_start = gspread.utils.rowcol_to_a1(start_row, pay_col)
+            pay_end = gspread.utils.rowcol_to_a1(end_row, pay_col)
+            ws_sales.update(
+                f"{pay_start}:{pay_end}",
+                pay_values,
+                value_input_option='USER_ENTERED'
+            )
             st.cache_data.clear()
             return True
             
