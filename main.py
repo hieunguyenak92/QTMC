@@ -39,6 +39,10 @@ if 'sales_cart' not in st.session_state:
     st.session_state['sales_cart'] = []
 if 'import_cart' not in st.session_state:
     st.session_state['import_cart'] = []
+if 'debt_cart' not in st.session_state:
+    st.session_state['debt_cart'] = []
+if 'debt_selected' not in st.session_state:
+    st.session_state['debt_selected'] = None
 
 # --- HAM HO TRO ---
 def format_currency(amount):
@@ -256,7 +260,288 @@ def render_sales(df_inv):
     else:
         st.info("Chưa có dữ liệu bán hàng.")
 
-# --- 3. MAN HINH NHAP HANG ---
+# --- 3. MAN HINH CONG NO ---
+def render_debt(df_inv):
+    st.subheader("🧾 Quản Lý Công Nợ")
+    st.info("Tạo đơn bán nợ và theo dõi trạng thái thanh toán của khách hàng.")
+
+    customer_name = st.text_input("Tên khách hàng mua nợ (*)", key="debt_customer_name").strip()
+
+    col_search, col_cart = st.columns([5, 5], gap="large")
+
+    with col_search:
+        st.info("Tìm kiếm sản phẩm để thêm vào giỏ nợ")
+        if not df_inv.empty:
+            search_term = st.text_input("🔍 Nhập tên hoặc mã sản phẩm", key="debt_search")
+
+            filtered_df = df_inv
+            if search_term:
+                filtered_df = df_inv[
+                    df_inv['TenSanPham'].str.contains(search_term, case=False, na=False) |
+                    df_inv['MaSanPham'].str.contains(search_term, case=False, na=False)
+                ]
+
+            if not filtered_df.empty:
+                options = filtered_df.apply(
+                    lambda x: f"{x['TenSanPham']} | Mã: {x['MaSanPham']} | Tồn: {int(x['SoLuong'])} {x['DonVi']}", axis=1
+                ).tolist()
+                selected_str = st.selectbox("Chọn sản phẩm:", [""] + options, key="debt_select")
+
+                if selected_str:
+                    selected_item = filtered_df[
+                        filtered_df.apply(
+                            lambda x: f"{x['TenSanPham']} | Mã: {x['MaSanPham']} | Tồn: {int(x['SoLuong'])} {x['DonVi']}", axis=1
+                        ) == selected_str
+                    ].iloc[0]
+
+                    with st.container(border=True):
+                        st.markdown(f"### {selected_item['TenSanPham']}")
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("Mã SP", selected_item['MaSanPham'])
+                        c2.metric("Đơn vị", selected_item['DonVi'])
+                        c3.metric("Tồn kho hiện tại", int(selected_item['SoLuong']))
+
+                        if selected_item['SoLuong'] < 10 and selected_item['SoLuong'] > 0:
+                            st.warning(f"⚠️ Tồn kho thấp: chỉ còn {int(selected_item['SoLuong'])} {selected_item['DonVi']}! Nên nhập thêm.")
+                        elif selected_item['SoLuong'] == 0:
+                            st.error("🚨 Hết hàng: Tồn kho = 0!")
+
+                        st.divider()
+
+                        col_price_temp, col_qty = st.columns([1, 1])
+                        default_price = float(selected_item['GiaBan'])
+                        temp_price = col_price_temp.number_input(
+                            "Giá bán nợ (đ)",
+                            min_value=0.0,
+                            value=default_price,
+                            step=1000.0,
+                            key=f"debt_temp_price_{selected_item['MaSanPham']}",
+                            format="%.0f"
+                        )
+                        qty_sell = col_qty.number_input(
+                            "Số lượng mua nợ",
+                            min_value=1,
+                            value=1,
+                            step=1,
+                            key=f"debt_qty_sell_{selected_item['MaSanPham']}"
+                        )
+
+                        if qty_sell > selected_item['SoLuong']:
+                            st.error(f"Không đủ tồn kho! Cần thêm ít nhất {qty_sell - selected_item['SoLuong']} {selected_item['DonVi']}.")
+                            st.markdown("#### 📦 Nhập nhanh bổ sung tồn kho ngay tại đây")
+                            with st.form(key=f"debt_quick_import_{selected_item['MaSanPham']}"):
+                                col_q, col_gn, col_gb = st.columns(3)
+                                suggested_qty = max(10, qty_sell - selected_item['SoLuong'])
+                                quick_qty = col_q.number_input("Số lượng nhập thêm", min_value=1, value=suggested_qty)
+                                quick_gn = col_gn.number_input("Giá nhập mới", value=float(selected_item['GiaNhap']), step=1000.0, format="%.0f")
+                                quick_gb = col_gb.number_input("Giá bán mới", value=float(selected_item['GiaBan']), step=1000.0, format="%.0f")
+
+                                if st.form_submit_button("💾 Nhập nhanh & Thêm vào giỏ nợ", type="primary"):
+                                    if quick_gn > 0 and quick_gb > 0:
+                                        temp_import = [{
+                                            "MaSanPham": selected_item['MaSanPham'],
+                                            "TenSanPham": selected_item['TenSanPham'],
+                                            "DonVi": selected_item['DonVi'],
+                                            "SoLuong": quick_qty,
+                                            "GiaNhap": quick_gn,
+                                            "GiaBan": quick_gb,
+                                            "NhaCungCap": ""
+                                        }]
+                                        if dm.process_import(temp_import):
+                                            st.success(f"Đã nhập thêm {quick_qty} {selected_item['DonVi']} vào kho!")
+                                            st.session_state['debt_cart'].append({
+                                                "MaSanPham": selected_item['MaSanPham'],
+                                                "TenSanPham": selected_item['TenSanPham'],
+                                                "DonVi": selected_item['DonVi'],
+                                                "GiaBan": temp_price,
+                                                "SoLuongBan": qty_sell,
+                                                "ThanhTien": qty_sell * temp_price
+                                            })
+                                            st.toast("Đã thêm vào giỏ nợ thành công!")
+                                            st.rerun()
+                                    else:
+                                        st.error("Giá nhập/bán không hợp lệ!")
+
+                        if st.button("➕ Thêm vào giỏ nợ", type="primary", key=f"add_debt_{selected_item['MaSanPham']}"):
+                            if qty_sell <= selected_item['SoLuong'] and temp_price > 0:
+                                st.session_state['debt_cart'].append({
+                                    "MaSanPham": selected_item['MaSanPham'],
+                                    "TenSanPham": selected_item['TenSanPham'],
+                                    "DonVi": selected_item['DonVi'],
+                                    "GiaBan": temp_price,
+                                    "SoLuongBan": qty_sell,
+                                    "ThanhTien": qty_sell * temp_price
+                                })
+                                st.toast(f"Đã thêm {selected_item['TenSanPham']} vào giỏ nợ!")
+                                st.rerun()
+                            else:
+                                st.error("Vui lòng kiểm tra giá và tồn kho!")
+            else:
+                st.warning("Không tìm thấy sản phẩm nào.")
+        else:
+            st.warning("Kho hàng trống.")
+
+    with col_cart:
+        st.info("Giỏ công nợ hiện tại")
+        if st.session_state['debt_cart']:
+            total_bill = 0
+            for idx in range(len(st.session_state['debt_cart']) - 1, -1, -1):
+                item = st.session_state['debt_cart'][idx]
+                with st.container(border=True):
+                    col_name, col_qty, col_price, col_total, col_del = st.columns([3, 1, 2, 2, 1])
+                    col_name.write(f"**{item['TenSanPham']}** ({item['MaSanPham']})")
+                    col_qty.write(f"{item['SoLuongBan']} {item['DonVi']}")
+                    col_price.write(f"Giá: {format_currency(item['GiaBan'])}")
+                    item_total = item['SoLuongBan'] * item['GiaBan']
+                    col_total.write(f"**{format_currency(item_total)}**")
+                    if col_del.button("🗑", key=f"del_debt_cart_{idx}"):
+                        st.session_state['debt_cart'].pop(idx)
+                        st.rerun()
+                total_bill += item_total
+
+            st.markdown(f"<h3 style='text-align: right; color: red;'>Tổng nợ: {format_currency(total_bill)}</h3>", unsafe_allow_html=True)
+            c1, c2 = st.columns(2)
+            if c1.button("🗑 Xóa toàn bộ giỏ nợ"):
+                st.session_state['debt_cart'] = []
+                st.rerun()
+            if c2.button("✅ HOÀN THÀNH GIỎ NỢ", type="primary"):
+                if not customer_name:
+                    st.error("Vui lòng nhập tên khách hàng trước khi lưu công nợ.")
+                else:
+                    debt_id = dm.process_debt_checkout(customer_name, st.session_state['debt_cart'])
+                    if debt_id:
+                        st.session_state['debt_cart'] = []
+                        st.success(f"Đã lưu công nợ thành công! Mã phiếu nợ: {debt_id}")
+                        st.rerun()
+        else:
+            st.caption("Chưa có hàng trong giỏ nợ.")
+
+    st.divider()
+    st.subheader("📋 Danh Sách Khách Công Nợ")
+    df_debt = dm.load_debt_records()
+
+    if df_debt.empty:
+        st.info("Hiện chưa có công nợ nào.")
+        return
+
+    st.markdown("#### Bộ lọc công nợ")
+    fc1, fc2, fc3 = st.columns([2, 1, 1])
+    customer_filter = fc1.text_input("Lọc theo tên khách", key="debt_filter_name").strip()
+
+    valid_dates = df_debt['NgayParsed'].dropna().dt.date
+    tz = pytz.timezone('Asia/Ho_Chi_Minh')
+    today = datetime.now(tz).date()
+    default_from = valid_dates.min() if not valid_dates.empty else today
+    default_to = valid_dates.max() if not valid_dates.empty else today
+
+    date_from = fc2.date_input("Từ ngày", value=default_from, key="debt_filter_from")
+    date_to = fc3.date_input("Đến ngày", value=default_to, key="debt_filter_to")
+
+    if date_from > date_to:
+        st.error("Khoảng ngày lọc không hợp lệ (Từ ngày phải nhỏ hơn hoặc bằng Đến ngày).")
+        return
+
+    filtered_debt = df_debt.copy()
+    if customer_filter:
+        filtered_debt = filtered_debt[
+            filtered_debt['TenKH'].str.contains(customer_filter, case=False, na=False)
+        ]
+    if not filtered_debt.empty:
+        debt_dates = filtered_debt['NgayParsed'].dt.date
+        filtered_debt = filtered_debt[(debt_dates >= date_from) & (debt_dates <= date_to)]
+
+    if filtered_debt.empty:
+        st.info("Không có công nợ phù hợp với bộ lọc hiện tại.")
+        return
+
+    summary = (
+        filtered_debt.groupby(['MaPhieuNo'], as_index=False)
+        .agg(
+            TenKH=('TenKH', 'first'),
+            NgayRaw=('NgayRaw', 'first'),
+            TongNo=('ThanhTien', 'sum'),
+            TongSoLuong=('SoLuong', 'sum'),
+            NgayParsed=('NgayParsed', 'max')
+        )
+    )
+    summary = summary.sort_values(by='NgayParsed', ascending=False, na_position='last').reset_index(drop=True)
+
+    if st.session_state.get('debt_selected'):
+        selected = st.session_state['debt_selected']
+        still_exists = (summary['MaPhieuNo'] == selected.get('MaPhieuNo')).any()
+        if not still_exists:
+            st.session_state['debt_selected'] = None
+
+    header1, header2, header3, header4, header5 = st.columns([2.5, 2.5, 2, 2, 1.2])
+    header1.markdown("**Khách hàng**")
+    header2.markdown("**Mã phiếu nợ**")
+    header3.markdown("**Tổng công nợ**")
+    header4.markdown("**Ngày mua nợ**")
+    header5.markdown("**Tổng SL**")
+
+    for idx, row in summary.iterrows():
+        customer = str(row['TenKH']).strip()
+        debt_id = str(row['MaPhieuNo']).strip()
+        debt_time_raw = str(row['NgayRaw']).strip()
+        if pd.notna(row['NgayParsed']):
+            debt_time_display = row['NgayParsed'].strftime("%d/%m/%Y %H:%M")
+        else:
+            debt_time_display = debt_time_raw
+
+        c1, c2, c3, c4, c5 = st.columns([2.5, 2.5, 2, 2, 1.2])
+        if c1.button(customer, key=f"debt_customer_{idx}_{debt_id}"):
+            st.session_state['debt_selected'] = {
+                'MaPhieuNo': debt_id,
+                'TenKH': customer,
+                'NgayRaw': debt_time_raw
+            }
+        c2.code(debt_id)
+        c3.write(format_currency(row['TongNo']))
+        c4.write(debt_time_display)
+        c5.write(int(row['TongSoLuong']))
+
+    selected = st.session_state.get('debt_selected')
+    if selected:
+        selected_debt_id = selected.get('MaPhieuNo', '')
+        selected_customer = selected.get('TenKH', '')
+        selected_time = selected.get('NgayRaw', '')
+        selected_rows = filtered_debt[filtered_debt['MaPhieuNo'] == selected_debt_id].copy()
+
+        if not selected_rows.empty:
+            st.divider()
+            st.markdown(f"### Chi tiết công nợ: {selected_customer}")
+            st.caption(f"Mã phiếu nợ: {selected_debt_id}")
+            selected_dt = selected_rows['NgayParsed'].dropna()
+            if not selected_dt.empty:
+                st.caption(f"Ngày mua nợ: {selected_dt.iloc[0].strftime('%d/%m/%Y %H:%M')}")
+            else:
+                st.caption(f"Ngày mua nợ: {selected_time}")
+
+            detail_df = selected_rows[['TenSanPham', 'SoLuong', 'ThanhTien']].copy()
+            detail_df['SoLuong'] = detail_df['SoLuong'].astype(int)
+            detail_df['ThanhTien'] = detail_df['ThanhTien'].apply(format_currency)
+            detail_df.columns = ['Sản phẩm', 'Số lượng', 'Thành tiền']
+            st.table(detail_df)
+
+            total_selected = selected_rows['ThanhTien'].sum()
+            st.markdown(
+                f"<h4 style='text-align: right; color: #D35400;'>Tổng công nợ đơn này: {format_currency(total_selected)}</h4>",
+                unsafe_allow_html=True
+            )
+
+            c1, c2 = st.columns(2)
+            if c1.button("✅ Đã trả", type="primary", key="debt_mark_paid"):
+                if dm.settle_debt(selected_debt_id, selected_customer, selected_time):
+                    st.success("Đã cập nhật trạng thái thanh toán công nợ.")
+                    st.session_state['debt_selected'] = None
+                    st.rerun()
+                else:
+                    st.error("Không thể cập nhật công nợ. Vui lòng thử lại.")
+            if c2.button("Bỏ chọn", key="debt_unselect"):
+                st.session_state['debt_selected'] = None
+                st.rerun()
+
+# --- 4. MAN HINH NHAP HANG ---
 def render_import(df_inv):
     st.subheader("📦 Nhập Kho")
     tab1, tab2 = st.tabs(["Nhập thêm hàng cũ", "Thêm sản phẩm mới hoàn toàn"])
@@ -368,7 +653,7 @@ def render_import(df_inv):
                 st.success("Đã nhập kho thành công!")
                 st.rerun()
 
-# --- 4. MAN HINH BAO CAO ---
+# --- 5. MAN HINH BAO CAO ---
 def render_reports(df_inv):
     st.subheader("📊 Báo Cáo Hệ Thống")
     
@@ -582,17 +867,19 @@ def main():
             if os.path.exists("assets/logo.png"):
                 st.image("assets/logo.png", width=120)
             st.title("Hệ Thống Quản Lý")
-            menu = st.radio("Chức năng chính", ["Bán Hàng", "Nhập Hàng", "Báo Cáo"], index=0)
+            menu = st.radio("Chức năng chính", ["Bán Hàng", "Công Nợ", "Nhập Hàng", "Báo Cáo"], index=0)
             st.divider()
             if st.button("Đăng Xuất"):
                 st.session_state['is_logged_in'] = False
                 st.rerun()
-            st.caption("Minh Châu 24h v2.5")
+            st.caption("Minh Châu 24h v2.6")
 
         render_header()
         
         if menu == "Bán Hàng":
             render_sales(df_inventory)
+        elif menu == "Công Nợ":
+            render_debt(df_inventory)
         elif menu == "Nhập Hàng":
             render_import(df_inventory)
         elif menu == "Báo Cáo":
