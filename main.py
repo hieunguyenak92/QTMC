@@ -377,8 +377,9 @@ def render_sales(df_inv):
         valid_dates = df_sales['NgayBan'].dropna().dt.date
         if not valid_dates.empty:
             min_date = valid_dates.min()
-            max_date = valid_dates.max()
-            default_date = today_date if min_date <= today_date <= max_date else max_date
+            # Luôn cho phép chọn ngày hôm nay dù chưa phát sinh đơn.
+            max_date = max(valid_dates.max(), today_date)
+            default_date = today_date
         else:
             min_date = today_date
             max_date = today_date
