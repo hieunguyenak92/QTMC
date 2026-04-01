@@ -5,5 +5,4 @@ pandas
 gspread
 oauth2client
 plotly
-streamlit-authenticator google-auth streamlit pandas gspread oauth2client plotly
 pytz
