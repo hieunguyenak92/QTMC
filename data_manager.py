@@ -6,6 +6,7 @@ from datetime import datetime
 import re  # Để clean symbol robust / extract sheet key
 import time
 import pytz  # Để set timezone VN
+from sheet_utils import ensure_worksheet_capacity
 
 # NOTE: User request: do not use clean_to_float anymore.
 # Keeping function for backward compatibility if referenced elsewhere,
@@ -288,6 +289,8 @@ def process_checkout(cart_items, payment_method='Tiền mặt'):
     sh = get_connection()
     if not sh: return False
     
+    inventory_updates = []
+    applied_inventory_updates = []
     try:
         ws_inventory = sh.worksheet("TonKho")
         ws_sales = sh.worksheet("LichSuBan")
@@ -344,7 +347,7 @@ def process_checkout(cart_items, payment_method='Tiền mặt'):
                     return False
                 
                 new_qty = current_qty - qty_sell
-                ws_inventory.update_cell(idx + 2, 4, new_qty)
+                inventory_updates.append((idx + 2, current_qty, new_qty))
                 
                 # Lưu số nguyên VND để tránh lỗi định dạng khi ghi Sheets
                 gia_ban_int = int(round(gia_ban))
@@ -374,26 +377,36 @@ def process_checkout(cart_items, payment_method='Tiền mặt'):
             end_col = len(sales_headers)
             start_cell = gspread.utils.rowcol_to_a1(start_row, 1)
             end_cell = gspread.utils.rowcol_to_a1(end_row, end_col)
+
+            # update(range, values) không tự mở rộng grid của Google Sheets.
+            # Chừa thêm một vùng đệm để không phải resize sau mỗi lần thanh toán.
+            ensure_worksheet_capacity(ws_sales, end_row, end_col)
+
+            # Nếu ghi lịch sử thất bại, hoàn lại mọi cập nhật tồn kho đã thực hiện.
+            for inventory_row, old_qty, new_qty in inventory_updates:
+                ws_inventory.update_cell(inventory_row, 4, new_qty)
+                applied_inventory_updates.append((inventory_row, old_qty))
+
             ws_sales.update(
                 f"{start_cell}:{end_cell}",
                 sales_rows,
                 value_input_option='RAW'
             )
-
-            # Ép ghi lại cột HinhThucTT để chắc chắn luôn có giá trị thanh toán.
-            pay_col = sales_idx['HinhThucTT'] + 1
-            pay_values = [[payment_method] for _ in sales_rows]
-            pay_start = gspread.utils.rowcol_to_a1(start_row, pay_col)
-            pay_end = gspread.utils.rowcol_to_a1(end_row, pay_col)
-            ws_sales.update(
-                f"{pay_start}:{pay_end}",
-                pay_values,
-                value_input_option='RAW'
-            )
+            # Từ đây giao dịch đã ghi đủ lịch sử và tồn kho; lỗi làm mới cache
+            # không được phép kích hoạt rollback tồn kho.
+            applied_inventory_updates.clear()
             st.cache_data.clear()
             return True
             
     except Exception as e:
+        rollback_errors = []
+        for inventory_row, old_qty in reversed(applied_inventory_updates):
+            try:
+                ws_inventory.update_cell(inventory_row, 4, old_qty)
+            except Exception as rollback_error:
+                rollback_errors.append(str(rollback_error))
+        if rollback_errors:
+            st.error("Lỗi nghiêm trọng: không thể hoàn nguyên tồn kho. Vui lòng kiểm tra lại TonKho.")
         st.error(f"Lỗi: {str(e)}")
         return False
     return False
